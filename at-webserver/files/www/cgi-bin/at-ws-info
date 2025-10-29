@@ -10,17 +10,57 @@ WS_PORT=$(uci get at-webserver.config.websocket_port 2>/dev/null || echo "8765")
 ALLOW_WAN=$(uci get at-webserver.config.websocket_allow_wan 2>/dev/null || echo "0")
 
 # 获取当前访问的主机名/IP（从 HTTP_HOST 获取）
-WS_HOST="${HTTP_HOST%%:*}"
+# 正确处理 IPv4 和 IPv6 地址
+if [ -n "$HTTP_HOST" ]; then
+    # 检查是否是 IPv6 格式 [ipv6]:port
+    case "$HTTP_HOST" in
+        \[*\]:*)
+            # IPv6 with port: [2001:db8::1]:8080
+            WS_HOST="${HTTP_HOST#\[}"
+            WS_HOST="${WS_HOST%%\]:*}"
+            ;;
+        \[*\])
+            # IPv6 without port: [2001:db8::1]
+            WS_HOST="${HTTP_HOST#\[}"
+            WS_HOST="${WS_HOST%\]}"
+            ;;
+        *:*:*)
+            # Pure IPv6 without brackets: 2001:db8::1
+            WS_HOST="$HTTP_HOST"
+            ;;
+        *:*)
+            # IPv4 with port: 192.168.1.1:80
+            WS_HOST="${HTTP_HOST%%:*}"
+            ;;
+        *)
+            # Hostname or IPv4 without port
+            WS_HOST="$HTTP_HOST"
+            ;;
+    esac
+fi
 
 # 如果获取不到，使用默认值
 if [ -z "$WS_HOST" ]; then
-    # 尝试获取路由器 LAN IP
+    # 尝试获取路由器 LAN IP (优先 IPv4)
     WS_HOST=$(uci get network.lan.ipaddr 2>/dev/null)
+    # 如果没有 IPv4，尝试获取 IPv6
+    if [ -z "$WS_HOST" ]; then
+        WS_HOST=$(uci get network.lan.ip6addr 2>/dev/null | cut -d'/' -f1)
+    fi
     [ -z "$WS_HOST" ] && WS_HOST="192.168.1.1"
 fi
 
-# 构建 WebSocket URL
-WS_URL="ws://${WS_HOST}:${WS_PORT}"
+# 构建 WebSocket URL (IPv6 需要用方括号包裹)
+case "$WS_HOST" in
+    *:*:*)
+        # IPv6 地址，需要用方括号
+        WS_URL="ws://[${WS_HOST}]:${WS_PORT}"
+        ;;
+    *)
+        # IPv4 或域名
+        WS_URL="ws://${WS_HOST}:${WS_PORT}"
+        ;;
+esac
 
 # 返回 JSON
 cat <<EOF
