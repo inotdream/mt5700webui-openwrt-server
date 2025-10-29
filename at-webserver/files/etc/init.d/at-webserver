@@ -1,0 +1,103 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+
+USE_PROCD=1
+PROG=/usr/bin/at-server.py
+PROG_NAME="at-server.py"
+
+# 加载 UCI 函数库（必须在文件顶部）
+. /lib/functions.sh
+
+start_service() {
+	local enabled
+	
+	# 输出到系统日志
+	logger -t at-webserver "开始启动服务..."
+	
+	# 确保最新的 UCI 已提交
+	uci -q commit at-webserver
+	
+	# 加载配置
+	config_load at-webserver
+	config_get_bool enabled config enabled 0
+	
+	if [ "$enabled" -eq 0 ]; then
+		logger -t at-webserver "服务已禁用，退出启动"
+		echo "AT WebServer is disabled in configuration"
+		return 1
+	fi
+	
+	# 检查 Python 脚本是否存在
+	if [ ! -f "$PROG" ]; then
+		logger -t at-webserver "错误：找不到脚本文件 $PROG"
+		echo "Error: $PROG not found"
+		return 1
+	fi
+	
+	# 检查 Python3 是否存在
+	if ! command -v python3 >/dev/null 2>&1; then
+		logger -t at-webserver "错误：python3 未安装"
+		echo "Error: python3 not found"
+		return 1
+	fi
+	
+	# 确保没有旧进程在运行
+	killall -q -9 "$PROG_NAME" 2>/dev/null
+	sleep 1
+	
+	logger -t at-webserver "配置 procd 实例..."
+	echo "Starting AT WebServer..."
+	
+	# 启动 procd 服务（不指定实例名，使用默认 instance1）
+	procd_open_instance
+	procd_set_param command python3 "$PROG"
+	procd_set_param respawn ${respawn_threshold:-3600} ${respawn_timeout:-5} ${respawn_retry:-5}
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param pidfile /var/run/at-webserver.pid
+	procd_close_instance
+	
+	logger -t at-webserver "服务启动配置完成，等待 procd 启动进程"
+	echo "AT WebServer started successfully"
+}
+
+stop_service() {
+	logger -t at-webserver "停止服务..."
+	echo "Stopping AT WebServer..."
+	
+	# 强制杀死所有相关进程
+	killall -q -9 "$PROG_NAME" 2>/dev/null
+	
+	# 清理 pidfile
+	rm -f /var/run/at-webserver.pid
+	
+	sleep 1
+	logger -t at-webserver "服务已停止"
+	echo "AT WebServer stopped"
+}
+
+reload_service() {
+	logger -t at-webserver "重新加载配置..."
+	echo "Reloading AT WebServer configuration..."
+	
+	# 提交最新配置
+	uci -q commit at-webserver
+	
+	# 强制停止所有相关进程
+	killall -q -9 "$PROG_NAME" 2>/dev/null
+	rm -f /var/run/at-webserver.pid
+	
+	# 等待进程完全停止
+	sleep 3
+	
+	# 重新启动服务
+	start_service
+	
+	logger -t at-webserver "配置重新加载完成"
+}
+
+service_triggers() {
+	procd_add_reload_trigger "at-webserver"
+}

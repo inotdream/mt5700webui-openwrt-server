@@ -1,0 +1,38 @@
+#!/bin/sh
+# AT WebServer WebSocket 信息 API
+
+echo "Content-Type: application/json"
+echo "Access-Control-Allow-Origin: *"
+echo ""
+
+# 读取配置
+WS_PORT=$(uci get at-webserver.config.websocket_port 2>/dev/null || echo "8765")
+ALLOW_WAN=$(uci get at-webserver.config.websocket_allow_wan 2>/dev/null || echo "0")
+
+# 获取当前访问的主机名/IP（从 HTTP_HOST 获取）
+WS_HOST="${HTTP_HOST%%:*}"
+
+# 如果获取不到，使用默认值
+if [ -z "$WS_HOST" ]; then
+    # 尝试获取路由器 LAN IP
+    WS_HOST=$(uci get network.lan.ipaddr 2>/dev/null)
+    [ -z "$WS_HOST" ] && WS_HOST="192.168.1.1"
+fi
+
+# 构建 WebSocket URL
+WS_URL="ws://${WS_HOST}:${WS_PORT}"
+
+# 返回 JSON
+cat <<EOF
+{
+  "success": true,
+  "data": {
+    "host": "${WS_HOST}",
+    "port": ${WS_PORT},
+    "allow_wan": ${ALLOW_WAN},
+    "ws_url": "${WS_URL}",
+    "timestamp": $(date +%s)
+  }
+}
+EOF
+

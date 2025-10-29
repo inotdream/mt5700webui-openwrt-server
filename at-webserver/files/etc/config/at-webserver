@@ -1,0 +1,65 @@
+
+config at-webserver 'config'
+	option enabled '1'
+	option connection_type 'NETWORK'
+	option network_host '192.168.8.1'
+	option network_port '20249'
+	option network_timeout '10'
+	option serial_port '/dev/ttyUSB0'
+	option serial_port_custom '/dev/ttyUSB0'  # 自定义串口路径（当 serial_port='custom' 时使用）
+	option serial_baudrate '115200'
+	option serial_timeout '10'
+	option websocket_port '8765'
+	# WebSocket 默认监听 0.0.0.0（局域网可访问）
+	# 外网访问控制请通过防火墙规则实现
+	option websocket_allow_wan '0'
+	
+	# 通知配置
+	option wechat_webhook ''
+	option log_file ''
+	option notify_sms '1'
+	option notify_call '1'
+	option notify_memory_full '1'
+	option notify_signal '1'
+	
+	# 定时锁频配置
+	option schedule_enabled '0'              # 启用定时锁频
+	option schedule_check_interval '60'      # 检测间隔（秒）
+	option schedule_timeout '180'            # 无服务超时时间（秒）
+	option schedule_unlock_lte '1'           # 恢复时解锁LTE
+	option schedule_unlock_nr '1'            # 恢复时解锁NR
+	option schedule_toggle_airplane '1'      # 切换飞行模式生效
+	
+	# 定时任务配置
+	option schedule_night_enabled '1'        # 启用夜间模式
+	option schedule_night_start '22:00'      # 夜间模式开始时间
+	option schedule_night_end '06:00'        # 夜间模式结束时间
+	
+	# 夜间模式 LTE 配置
+	option schedule_night_lte_type '3'       # LTE锁定类型: 0=解锁, 1=频点, 2=小区, 3=频段
+	option schedule_night_lte_bands ''       # LTE频段 (如: "3,8")
+	option schedule_night_lte_arfcns ''      # LTE频点 (如: "1850,3450")
+	option schedule_night_lte_pcis ''        # LTE PCI (如: "256,128")
+	
+	# 夜间模式 NR 配置
+	option schedule_night_nr_type '3'        # NR锁定类型: 0=解锁, 1=频点, 2=小区, 3=频段
+	option schedule_night_nr_bands ''        # NR频段 (如: "78,41")
+	option schedule_night_nr_arfcns ''       # NR频点 (如: "630000,520000")
+	option schedule_night_nr_scs_types ''    # NR SCS类型 (如: "1,1")
+	option schedule_night_nr_pcis ''         # NR PCI (如: "100,200")
+	
+	option schedule_day_enabled '1'          # 启用日间模式
+	
+	# 日间模式 LTE 配置
+	option schedule_day_lte_type '3'         # LTE锁定类型: 0=解锁, 1=频点, 2=小区, 3=频段
+	option schedule_day_lte_bands ''         # LTE频段
+	option schedule_day_lte_arfcns ''        # LTE频点
+	option schedule_day_lte_pcis ''          # LTE PCI
+	
+	# 日间模式 NR 配置
+	option schedule_day_nr_type '3'          # NR锁定类型: 0=解锁, 1=频点, 2=小区, 3=频段
+	option schedule_day_nr_bands ''          # NR频段
+	option schedule_day_nr_arfcns ''         # NR频点
+	option schedule_day_nr_scs_types ''      # NR SCS类型
+	option schedule_day_nr_pcis ''           # NR PCI
+

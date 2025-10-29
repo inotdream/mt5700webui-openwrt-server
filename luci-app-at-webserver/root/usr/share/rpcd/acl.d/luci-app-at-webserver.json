@@ -1,0 +1,22 @@
+{
+	"luci-app-at-webserver": {
+		"description": "Grant UCI access for luci-app-at-webserver",
+		"read": {
+			"uci": [ "at-webserver" ],
+			"ubus": {
+				"service": [ "list", "get_data" ],
+				"file": [ "read", "stat", "exec", "list" ],
+				"luci": [ "getInitList", "getLogread" ]
+			}
+		},
+		"write": {
+			"uci": [ "at-webserver" ],
+			"ubus": {
+				"service": [ "set" ],
+				"file": [ "write", "exec", "remove" ],
+				"luci": [ "setInitAction" ]
+			}
+		}
+	}
+}
+

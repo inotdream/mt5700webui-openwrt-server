@@ -1,0 +1,369 @@
+msgid ""
+msgstr "Content-Type: text/plain; charset=UTF-8"
+
+msgid "AT WebServer"
+msgstr "AT WebServer"
+
+msgid "WebSocket服务器，用于通过Web界面管理AT命令。"
+msgstr "WebSocket服务器，用于通过Web界面管理AT命令。"
+
+msgid "服务状态"
+msgstr "服务状态"
+
+msgid "运行中"
+msgstr "运行中"
+
+msgid "已停止"
+msgstr "已停止"
+
+msgid "启用服务"
+msgstr "启用服务"
+
+msgid "启用后服务将在系统启动时自动运行"
+msgstr "启用后服务将在系统启动时自动运行"
+
+msgid "连接类型"
+msgstr "连接类型"
+
+msgid "选择AT命令的连接方式"
+msgstr "选择AT命令的连接方式"
+
+msgid "网络连接"
+msgstr "网络连接"
+
+msgid "串口连接"
+msgstr "串口连接"
+
+msgid "网络主机"
+msgstr "网络主机"
+
+msgid "AT命令服务的IP地址"
+msgstr "AT命令服务的IP地址"
+
+msgid "网络端口"
+msgstr "网络端口"
+
+msgid "AT命令服务的端口号"
+msgstr "AT命令服务的端口号"
+
+msgid "网络超时"
+msgstr "网络超时"
+
+msgid "网络连接超时时间（秒）"
+msgstr "网络连接超时时间（秒）"
+
+msgid "串口设备"
+msgstr "串口设备"
+
+msgid "串口设备路径，例如 /dev/ttyUSB0"
+msgstr "串口设备路径，例如 /dev/ttyUSB0"
+
+msgid "波特率"
+msgstr "波特率"
+
+msgid "串口通信波特率"
+msgstr "串口通信波特率"
+
+msgid "串口超时"
+msgstr "串口超时"
+
+msgid "串口通信超时时间（秒）"
+msgstr "串口通信超时时间（秒）"
+
+msgid "WebSocket端口"
+msgstr "WebSocket端口"
+
+msgid "WebSocket服务器监听端口"
+msgstr "WebSocket服务器监听端口"
+
+msgid "Web 管理界面"
+msgstr "Web 管理界面"
+
+msgid "通知配置"
+msgstr "通知配置"
+
+msgid "配置短信、来电等事件的通知方式"
+msgstr "配置短信、来电等事件的通知方式"
+
+msgid "企业微信 Webhook"
+msgstr "企业微信 Webhook"
+
+msgid "企业微信机器人的 Webhook 地址，留空则不启用微信通知"
+msgstr "企业微信机器人的 Webhook 地址，留空则不启用微信通知"
+
+msgid "日志文件"
+msgstr "日志文件"
+
+msgid "保存通知记录的日志文件路径，留空则不启用日志记录"
+msgstr "保存通知记录的日志文件路径，留空则不启用日志记录"
+
+msgid "通知类型"
+msgstr "通知类型"
+
+msgid "选择需要接收的通知类型"
+msgstr "选择需要接收的通知类型"
+
+msgid "短信通知"
+msgstr "短信通知"
+
+msgid "接收到新短信时发送通知"
+msgstr "接收到新短信时发送通知"
+
+msgid "来电通知"
+msgstr "来电通知"
+
+msgid "来电时发送通知"
+msgstr "来电时发送通知"
+
+msgid "存储满通知"
+msgstr "存储满通知"
+
+msgid "短信存储空间满时发送警告"
+msgstr "短信存储空间满时发送警告"
+
+msgid "信号变化通知"
+msgstr "信号变化通知"
+
+msgid "网络信号强度变化或制式切换时发送通知"
+msgstr "网络信号强度变化或制式切换时发送通知"
+
+msgid "配置"
+msgstr "配置"
+
+msgid "日志查看"
+msgstr "日志查看"
+
+msgid "AT调试"
+msgstr "AT调试"
+
+msgid "通知日志"
+msgstr "通知日志"
+
+msgid "查看系统通知记录，包括短信、来电、信号变化等事件"
+msgstr "查看系统通知记录，包括短信、来电、信号变化等事件"
+
+msgid "未配置日志文件"
+msgstr "未配置日志文件"
+
+msgid "请先在配置页面设置日志文件路径，然后重启服务。"
+msgstr "请先在配置页面设置日志文件路径，然后重启服务。"
+
+msgid "前往配置"
+msgstr "前往配置"
+
+msgid "日志文件"
+msgstr "日志文件"
+
+msgid "刷新"
+msgstr "刷新"
+
+msgid "清空日志"
+msgstr "清空日志"
+
+msgid "清空所有日志记录吗？此操作不可恢复。"
+msgstr "清空所有日志记录吗？此操作不可恢复。"
+
+msgid "取消"
+msgstr "取消"
+
+msgid "确定清空"
+msgstr "确定清空"
+
+msgid "日志已清空"
+msgstr "日志已清空"
+
+msgid "清空日志失败: %s"
+msgstr "清空日志失败: %s"
+
+msgid "暂无日志记录"
+msgstr "暂无日志记录"
+
+msgid "共 %d 行记录"
+msgstr "共 %d 行记录"
+
+msgid "AT 命令调试"
+msgstr "AT 命令调试"
+
+msgid "直接发送 AT 命令到模块，查看实时响应"
+msgstr "直接发送 AT 命令到模块，查看实时响应"
+
+msgid "WebSocket 地址"
+msgstr "WebSocket 地址"
+
+msgid "连接状态"
+msgstr "连接状态"
+
+msgid "未连接"
+msgstr "未连接"
+
+msgid "服务未运行，请先启动 AT WebServer 服务"
+msgstr "服务未运行，请先启动 AT WebServer 服务"
+
+msgid "AT 命令"
+msgstr "AT 命令"
+
+msgid "输入 AT 命令，例如: AT+CPIN?"
+msgstr "输入 AT 命令，例如: AT+CPIN?"
+
+msgid "发送"
+msgstr "发送"
+
+msgid "清空输出"
+msgstr "清空输出"
+
+msgid "常用命令"
+msgstr "常用命令"
+
+msgid "查询 SIM 卡"
+msgstr "查询 SIM 卡"
+
+msgid "信号强度"
+msgstr "信号强度"
+
+msgid "运营商信息"
+msgstr "运营商信息"
+
+msgid "固件版本"
+msgstr "固件版本"
+
+msgid "小区信息"
+msgstr "小区信息"
+
+msgid "读取短信"
+msgstr "读取短信"
+
+msgid "输出"
+msgstr "输出"
+
+msgid "等待连接..."
+msgstr "等待连接..."
+
+msgid "未配置日志文件路径"
+msgstr "未配置日志文件路径"
+
+msgid "配置已保存，正在重启服务..."
+msgstr "配置已保存，正在重启服务..."
+
+msgid "服务已重启，配置已生效"
+msgstr "服务已重启，配置已生效"
+
+msgid "重启服务失败："
+msgstr "重启服务失败："
+
+msgid "外网访问标记"
+msgstr "外网访问标记"
+
+msgid "WebSocket 默认监听所有网卡（0.0.0.0），局域网内可正常访问。此选项仅作为配置标记，实际的外网访问控制请通过防火墙规则实现。"
+msgstr "WebSocket 默认监听所有网卡（0.0.0.0），局域网内可正常访问。此选项仅作为配置标记，实际的外网访问控制请通过防火墙规则实现。"
+
+msgid "读取日志文件失败: %s"
+msgstr "读取日志文件失败: %s"
+
+msgid "Python 运行日志"
+msgstr "Python 运行日志"
+
+msgid "查看 AT WebServer Python 脚本的运行状态和系统日志"
+msgstr "查看 AT WebServer Python 脚本的运行状态和系统日志"
+
+msgid "日志来源"
+msgstr "日志来源"
+
+msgid "刷新日志"
+msgstr "刷新日志"
+
+msgid "显示最近 200 条相关日志"
+msgstr "显示最近 200 条相关日志"
+
+msgid "共 %d 行 AT WebServer 相关日志"
+msgstr "共 %d 行 AT WebServer 相关日志"
+
+msgid "AT WebServer 可能尚未启动，或系统日志中没有相关记录。"
+msgstr "AT WebServer 可能尚未启动，或系统日志中没有相关记录。"
+
+msgid "提示：可以尝试"
+msgstr "提示：可以尝试"
+
+msgid "重启服务"
+msgstr "重启服务"
+
+msgid "后再查看日志。"
+msgstr "后再查看日志。"
+
+msgid "读取系统日志失败: %s"
+msgstr "读取系统日志失败: %s"
+
+msgid "通知日志"
+msgstr "通知日志"
+
+msgid "未配置日志文件"
+msgstr "未配置日志文件"
+
+msgid "读取通知日志失败: %s"
+msgstr "读取通知日志失败: %s"
+
+msgid "日志文件为空或暂无记录: %s"
+msgstr "日志文件为空或暂无记录: %s"
+
+msgid "路径"
+msgstr "路径"
+
+msgid "系统日志无法直接清空，将在下次重启后自动轮转"
+msgstr "系统日志无法直接清空，将在下次重启后自动轮转"
+
+msgid "未配置日志文件，无法清空"
+msgstr "未配置日志文件，无法清空"
+
+msgid "✓ 通知日志已清空"
+msgstr "✓ 通知日志已清空"
+
+msgid "清空失败: %s"
+msgstr "清空失败: %s"
+
+msgid "刷新"
+msgstr "刷新"
+
+msgid "清空日志"
+msgstr "清空日志"
+
+msgid "配置已保存，正在停止服务..."
+msgstr "配置已保存，正在停止服务..."
+
+msgid "服务已停止，等待2秒..."
+msgstr "服务已停止，等待2秒..."
+
+msgid "正在启动服务（读取新配置）..."
+msgstr "正在启动服务（读取新配置）..."
+
+msgid "✓ 服务已重启，新配置已生效！"
+msgstr "✓ 服务已重启，新配置已生效！"
+
+msgid "保存配置失败："
+msgstr "保存配置失败："
+
+msgid "配置已保存，正在由后端应用新配置..."
+msgstr "配置已保存，正在由后端应用新配置..."
+
+msgid "✓ 新配置已应用！"
+msgstr "✓ 新配置已应用！"
+
+msgid "应用配置失败："
+msgstr "应用配置失败："
+
+msgid "配置已保存，正在提交到 UCI..."
+msgstr "配置已保存，正在提交到 UCI..."
+
+msgid "UCI 已提交，正在应用..."
+msgstr "UCI 已提交，正在应用..."
+
+msgid "UCI 已应用，正在重载服务..."
+msgstr "UCI 已应用，正在重载服务..."
+
+msgid "配置已保存，正在确认提交..."
+msgstr "配置已保存，正在确认提交..."
+
+msgid "配置已确认，正在停止服务..."
+msgstr "配置已确认，正在停止服务..."
+
+msgid "服务已停止，等待进程完全退出..."
+msgstr "服务已停止，等待进程完全退出..."
+
