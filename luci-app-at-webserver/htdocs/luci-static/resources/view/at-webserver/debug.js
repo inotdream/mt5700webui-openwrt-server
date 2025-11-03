@@ -26,7 +26,17 @@ return view.extend({
 		} catch(e) { }
 
 		var wsPort = uci.get('at-webserver', 'config', 'websocket_port') || '8765';
+		var wsAuthKey = uci.get('at-webserver', 'config', 'websocket_auth_key') || '';
 		var wsUrl = 'ws://' + window.location.hostname + ':' + wsPort;
+		
+		// 安全处理：转义 JavaScript 字符串中的特殊字符
+		var wsAuthKeyEscaped = wsAuthKey
+			.replace(/\\/g, '\\\\')   // 反斜杠
+			.replace(/'/g, "\\'")      // 单引号
+			.replace(/"/g, '\\"')      // 双引号
+			.replace(/\n/g, '\\n')     // 换行
+			.replace(/\r/g, '\\r')     // 回车
+			.replace(/\t/g, '\\t');    // 制表符
 
 		var view = E('div', { 'class': 'cbi-map' }, [
 			E('h2', {}, _('AT 命令调试')),
@@ -160,6 +170,8 @@ return view.extend({
 	var ws = null;
 	var reconnectTimer = null;
 	var isManualClose = false;
+	var isAuthenticated = false;
+	var authKey = '${wsAuthKeyEscaped}';
 	
 	var statusEl = document.getElementById('connection-status');
 	var outputEl = document.getElementById('at-output');
@@ -191,24 +203,56 @@ return view.extend({
 			return;
 		}
 		
+		isAuthenticated = false;
 		updateStatus('连接中...', 'orange');
 		appendOutput('正在连接到 ${wsUrl}', 'info');
 		
 		ws = new WebSocket('${wsUrl}');
 		
 		ws.onopen = function() {
-			updateStatus('已连接', 'green');
-			appendOutput('WebSocket 连接成功', 'info');
-			sendBtn.disabled = false;
-			if (reconnectTimer) {
-				clearTimeout(reconnectTimer);
-				reconnectTimer = null;
+			// 如果需要认证，先发送认证信息
+			if (authKey) {
+				updateStatus('认证中...', 'orange');
+				appendOutput('正在进行身份验证...', 'info');
+				ws.send(JSON.stringify({ auth_key: authKey }));
+			} else {
+				// 无需认证，直接标记为已认证
+				isAuthenticated = true;
+				updateStatus('已连接', 'green');
+				appendOutput('WebSocket 连接成功', 'info');
+				sendBtn.disabled = false;
+				if (reconnectTimer) {
+					clearTimeout(reconnectTimer);
+					reconnectTimer = null;
+				}
 			}
 		};
 		
 		ws.onmessage = function(event) {
 			try {
 				var data = JSON.parse(event.data);
+				
+				// 处理认证响应
+				if (!isAuthenticated && authKey) {
+					if (data.success) {
+						isAuthenticated = true;
+						updateStatus('已连接', 'green');
+						appendOutput('身份验证成功', 'info');
+						sendBtn.disabled = false;
+						if (reconnectTimer) {
+							clearTimeout(reconnectTimer);
+							reconnectTimer = null;
+						}
+						return;
+					} else if (data.error) {
+						appendOutput('认证失败: ' + (data.message || data.error), 'error');
+						updateStatus('认证失败', 'red');
+						ws.close();
+						return;
+					}
+				}
+				
+				// 处理 AT 命令响应
 				if (data.type === 'raw_data') {
 					appendOutput(data.data, 'recv');
 				} else if (data.success !== undefined) {
@@ -242,6 +286,11 @@ return view.extend({
 	function sendCommand(cmd) {
 		if (!ws || ws.readyState !== WebSocket.OPEN) {
 			appendOutput('未连接到服务器', 'error');
+			return;
+		}
+		
+		if (authKey && !isAuthenticated) {
+			appendOutput('等待身份验证...', 'error');
 			return;
 		}
 		

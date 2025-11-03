@@ -7,6 +7,12 @@
 				"service": [ "list", "get_data" ],
 				"file": [ "read", "stat", "exec", "list" ],
 				"luci": [ "getInitList", "getLogread" ]
+			},
+			"file": {
+				"/tmp/at-notifications.log": [ "read", "stat" ],
+				"/var/log/at-notifications.log": [ "read", "stat" ],
+				"/tmp/*": [ "read", "stat" ],
+				"/var/log/*": [ "read", "stat" ]
 			}
 		},
 		"write": {
@@ -15,6 +21,12 @@
 				"service": [ "set" ],
 				"file": [ "write", "exec", "remove" ],
 				"luci": [ "setInitAction" ]
+			},
+			"file": {
+				"/tmp/at-notifications.log": [ "write", "read", "stat" ],
+				"/var/log/at-notifications.log": [ "write", "read", "stat" ],
+				"/tmp/*": [ "write", "read", "stat" ],
+				"/var/log/*": [ "write", "stat" ]
 			}
 		}
 	}

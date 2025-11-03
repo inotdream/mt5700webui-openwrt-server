@@ -8,6 +8,14 @@ echo ""
 # 读取配置
 WS_PORT=$(uci get at-webserver.config.websocket_port 2>/dev/null || echo "8765")
 ALLOW_WAN=$(uci get at-webserver.config.websocket_allow_wan 2>/dev/null || echo "0")
+AUTH_KEY=$(uci get at-webserver.config.websocket_auth_key 2>/dev/null || echo "")
+
+# 判断是否需要密钥（但不返回密钥本身）
+if [ -n "$AUTH_KEY" ]; then
+    REQUIRE_AUTH="true"
+else
+    REQUIRE_AUTH="false"
+fi
 
 # 获取当前访问的主机名/IP（从 HTTP_HOST 获取）
 # 正确处理 IPv4 和 IPv6 地址
@@ -70,6 +78,7 @@ cat <<EOF
     "host": "${WS_HOST}",
     "port": ${WS_PORT},
     "allow_wan": ${ALLOW_WAN},
+    "require_auth": ${REQUIRE_AUTH},
     "ws_url": "${WS_URL}",
     "timestamp": $(date +%s)
   }

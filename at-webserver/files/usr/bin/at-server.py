@@ -16,7 +16,7 @@ import logging
 
 # 配置日志
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,  # 默认只记录警告和错误，减少日志输出
     format='%(asctime)s [%(levelname)s] %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
@@ -54,7 +54,8 @@ DEFAULT_CONFIG = {
         "IPV6": {
             "HOST": "::",
             "PORT": 8765
-        }
+        },
+        "AUTH_KEY": ""  # 连接密钥（留空则不验证）
     }
 }
 
@@ -154,12 +155,23 @@ def load_config():
         config['WEBSOCKET_CONFIG']['IPV4']['HOST'] = '0.0.0.0'
         config['WEBSOCKET_CONFIG']['IPV6']['HOST'] = '::'
         
+        # 读取连接密钥
+        result = subprocess.run(['uci', 'get', 'at-webserver.config.websocket_auth_key'],
+                              capture_output=True, text=True)
+        auth_key = result.stdout.strip() if result.returncode == 0 else ''
+        config['WEBSOCKET_CONFIG']['AUTH_KEY'] = auth_key
+        
         if allow_wan:
             logger.info(f"配置加载: WebSocket 端口 = {ws_port} (允许外网访问)")
             logger.warning("⚠ 外网访问已启用，请确保已配置防火墙规则保护")
         else:
             logger.info(f"配置加载: WebSocket 端口 = {ws_port} (局域网访问)")
             logger.info("💡 如需限制访问，建议配置防火墙规则")
+        
+        if auth_key:
+            logger.info(f"配置加载: 连接密钥已设置 (长度: {len(auth_key)})")
+        else:
+            logger.info(f"配置加载: 连接密钥未设置 (允许无密钥访问)")
         
         # 读取通知配置
         result = subprocess.run(['uci', 'get', 'at-webserver.config.wechat_webhook'],
@@ -2319,8 +2331,56 @@ class WebSocketServer:
 
     async def handle_client(self, websocket, path=None):
         """处理WebSocket客户端连接"""
+        auth_key = WEBSOCKET_CONFIG.get('AUTH_KEY', '')
+        
+        # 如果配置了密钥，需要先验证
+        if auth_key:
+            try:
+                # 等待客户端发送认证信息
+                auth_message = await asyncio.wait_for(websocket.recv(), timeout=10.0)
+                auth_data = json.loads(auth_message)
+                
+                # 验证密钥
+                client_key = auth_data.get('auth_key', '')
+                if client_key != auth_key:
+                    await websocket.send(json.dumps({
+                        'error': 'Authentication failed',
+                        'message': '密钥验证失败'
+                    }))
+                    await websocket.close()
+                    logger.warning(f"WebSocket连接被拒绝: 密钥错误")
+                    return
+                
+                # 验证成功
+                await websocket.send(json.dumps({
+                    'success': True,
+                    'message': '认证成功'
+                }))
+                logger.debug("WebSocket客户端认证成功")
+                
+            except asyncio.TimeoutError:
+                await websocket.send(json.dumps({
+                    'error': 'Authentication timeout',
+                    'message': '认证超时'
+                }))
+                await websocket.close()
+                logger.warning("WebSocket连接被拒绝: 认证超时")
+                return
+            except (json.JSONDecodeError, KeyError):
+                await websocket.send(json.dumps({
+                    'error': 'Invalid authentication',
+                    'message': '无效的认证数据'
+                }))
+                await websocket.close()
+                logger.warning("WebSocket连接被拒绝: 无效的认证数据")
+                return
+            except Exception as e:
+                logger.error(f"认证过程出错: {e}")
+                await websocket.close()
+                return
+        
         self._active_connections.add(websocket)
-        logger.info("新的WebSocket客户端已连接")
+        logger.debug("新的WebSocket客户端已连接")
         
         # 启动心跳检测
         heartbeat_task = asyncio.create_task(self._heartbeat_loop(websocket))
@@ -2350,7 +2410,7 @@ class WebSocketServer:
         finally:
             heartbeat_task.cancel()
             self._active_connections.discard(websocket)
-            logger.info("WebSocket客户端连接已清理")
+            logger.debug("WebSocket客户端连接已清理")
 
     async def _heartbeat_loop(self, websocket):
         """心跳检测循环"""
@@ -2376,6 +2436,8 @@ class WebSocketServer:
 
 async def main():
     """主函数"""
+    # 启动阶段临时启用 INFO 级别日志
+    logger.setLevel(logging.INFO)
     logger.info("=" * 60)
     logger.info("AT WebServer 启动中...")
     logger.info("=" * 60)
@@ -2556,6 +2618,11 @@ async def main():
         logger.info(f"WebSocket IPv6: ws://[{ws_config['IPV6']['HOST']}]:{ws_config['IPV6']['PORT']}")
         logger.info("=" * 60)
         logger.info("按 Ctrl+C 停止服务")
+        logger.info("=" * 60)
+        
+        # 启动完成，降低日志级别，只记录警告和错误
+        logger.setLevel(logging.WARNING)
+        logger.warning("日志级别已切换为 WARNING，仅记录警告和错误")
         
         # 等待服务器关闭
         await asyncio.gather(

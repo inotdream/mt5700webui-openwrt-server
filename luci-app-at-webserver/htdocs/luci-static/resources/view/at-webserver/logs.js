@@ -29,29 +29,22 @@ return view.extend({
 	},
 
 	handleClearLog: function(ev) {
-		return uci.load('at-webserver').then(L.bind(function() {
-			var logFile = uci.get('at-webserver', 'config', 'log_file') || '';
-			if (!logFile) {
-				ui.addNotification(null, E('p', _('未配置日志文件，无法清空')), 'warning');
-				return;
-			}
-			// 使用多种方法确保文件被清空
-			return fs.exec('/bin/sh', ['-c', '> ' + logFile + ' 2>/dev/null || echo "" > ' + logFile + ' 2>/dev/null || true']).then(function(res) {
-				// 无论命令是否成功，都尝试用 fs.write 方法
-				return fs.write(logFile, '').then(function() {
+		// 通过 HTTP 请求调用 CGI 脚本清空日志
+		return L.Request.get('/cgi-bin/at-log-clear').then(function(res) {
+			try {
+				var result = res.json();
+				if (result.success) {
 					ui.addNotification(null, E('p', _('✓ 通知日志已清空')), 'success');
 					setTimeout(function() { window.location.reload(); }, 600);
-				}).catch(function(err) {
-					// 如果 fs.write 也失败，检查之前的命令结果
-					if (res.code === 0) {
-						ui.addNotification(null, E('p', _('✓ 通知日志已清空')), 'success');
-						setTimeout(function() { window.location.reload(); }, 600);
-					} else {
-						ui.addNotification(null, E('p', _('清空失败: %s').format(err.message || '权限不足')), 'error');
-					}
-				});
-			});
-		}, this));
+				} else {
+					ui.addNotification(null, E('p', _('清空失败: %s').format(result.error || '未知错误')), 'error');
+				}
+			} catch(e) {
+				ui.addNotification(null, E('p', _('清空失败: 解析响应出错')), 'error');
+			}
+		}).catch(function(err) {
+			ui.addNotification(null, E('p', _('清空失败: %s').format(err.message || '请求失败')), 'error');
+		});
 	},
 
 	render: function(data) {

@@ -1,0 +1,21 @@
+#!/bin/sh
+# 清空 AT WebServer 通知日志
+
+echo "Content-Type: application/json"
+echo ""
+
+# 获取日志文件路径
+LOG_FILE=$(uci get at-webserver.config.log_file 2>/dev/null)
+
+if [ -z "$LOG_FILE" ]; then
+    echo '{"success": false, "error": "未配置日志文件"}'
+    exit 0
+fi
+
+# 清空日志文件
+if > "$LOG_FILE" 2>/dev/null; then
+    echo '{"success": true, "message": "日志已清空"}'
+else
+    echo '{"success": false, "error": "清空失败，权限不足"}'
+fi
+

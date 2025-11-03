@@ -84,11 +84,28 @@ return view.extend({
 		o.default = '20249';
 		o.depends('connection_type', 'NETWORK');
 
-		o = s.option(form.Value, 'network_timeout', _('网络超时'),
-			_('网络连接超时时间（秒）'));
-		o.datatype = 'uinteger';
-		o.default = '10';
-		o.depends('connection_type', 'NETWORK');
+	o = s.option(form.Value, 'network_timeout', _('网络超时'),
+		_('网络连接超时时间（秒）'));
+	o.datatype = 'uinteger';
+	o.default = '10';
+	o.depends('connection_type', 'NETWORK');
+
+	// 模块访问安全配置（始终显示，但仅在网络连接模式下生效）
+	o = s.option(form.DummyValue, '_module_security_title', _('模块访问安全'));
+	o.rawhtml = true;
+	o.cfgvalue = function() {
+		return '<strong style="color:#0099CC;">━━━━━━━ 模块 (192.168.8.1:20249) 访问控制 ━━━━━━━</strong>';
+	};
+
+	o = s.option(form.Flag, 'network_allow_wan', _('☐ 允许外网访问模块'),
+		_('是否允许从外网直接访问模块的 AT 端口。<br><strong style="color:red;">⚠️ 安全警告：</strong>开启此选项将允许任何人从外网访问模块，存在严重安全风险！<br><strong>建议：</strong>保持关闭，仅通过 WebSocket 管理。<br><em>注意：此选项仅在"网络连接"模式下生效。</em>'));
+	o.default = '0';
+	o.rmempty = false;
+
+	o = s.option(form.Flag, 'network_restrict_access', _('☐ 限制模块局域网访问'),
+		_('启用后，只有路由器本身可以访问模块（192.168.8.1:20249），局域网其他设备将无法访问。<br><strong>适用场景：</strong>防止局域网设备直接访问模块，统一通过 WebSocket 管理。<br><em>注意：此选项仅在"网络连接"模式下生效。</em>'));
+	o.default = '0';
+	o.rmempty = false;
 
 	// 串口连接配置
 	o = s.option(form.ListValue, 'serial_port', _('串口设备'),
@@ -170,16 +187,28 @@ return view.extend({
 		o.default = '10';
 		o.depends('connection_type', 'SERIAL');
 
-		// WebSocket配置
-		o = s.option(form.Value, 'websocket_port', _('WebSocket端口'),
-			_('WebSocket服务器监听端口'));
-		o.datatype = 'port';
-		o.default = '8765';
+	// WebSocket配置
+	o = s.option(form.DummyValue, '_websocket_title', _('WebSocket 配置'));
+	o.rawhtml = true;
+	o.cfgvalue = function() {
+		return '<strong style="color:#0099CC;">━━━━━━━ WebSocket (端口 8765) 配置 ━━━━━━━</strong>';
+	};
 
-		o = s.option(form.Flag, 'websocket_allow_wan', _('外网访问标记'),
-			_('WebSocket 默认监听所有网卡（0.0.0.0），局域网内可正常访问。此选项仅作为配置标记，实际的外网访问控制请通过防火墙规则实现。'));
-		o.rmempty = false;
-		o.default = '0';
+	o = s.option(form.Value, 'websocket_port', _('WebSocket 端口'),
+		_('WebSocket服务器监听端口'));
+	o.datatype = 'port';
+	o.default = '8765';
+
+	o = s.option(form.Flag, 'websocket_allow_wan', _('☐ 允许外网访问 WebSocket'),
+		_('是否允许从外网访问 WebSocket。启用后将自动配置防火墙规则。<br><strong>安全提示：</strong>如果允许外网访问，强烈建议设置连接密钥！'));
+	o.rmempty = false;
+	o.default = '0';
+
+	o = s.option(form.Value, 'websocket_auth_key', _('连接密钥'),
+		_('WebSocket 连接密钥，用于验证客户端身份。<br>留空则不进行验证（不安全！）<br>建议使用复杂的随机字符串。'));
+	o.password = true;
+	o.placeholder = '留空表示不验证';
+	o.rmempty = true;
 
 		// Web界面链接
 		o = s.option(form.DummyValue, '_webui', _('Web 管理界面'));

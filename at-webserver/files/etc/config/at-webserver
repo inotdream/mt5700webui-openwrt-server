@@ -5,14 +5,15 @@ config at-webserver 'config'
 	option network_host '192.168.8.1'
 	option network_port '20249'
 	option network_timeout '10'
+	option network_allow_wan '0'          # 是否允许外网访问模块 (0=禁止, 1=允许)
+	option network_restrict_access '0'    # 限制只有路由器本身可访问模块 (0=允许局域网, 1=仅路由器)
 	option serial_port '/dev/ttyUSB0'
 	option serial_port_custom '/dev/ttyUSB0'  # 自定义串口路径（当 serial_port='custom' 时使用）
 	option serial_baudrate '115200'
 	option serial_timeout '10'
 	option websocket_port '8765'
-	# WebSocket 默认监听 0.0.0.0（局域网可访问）
-	# 外网访问控制请通过防火墙规则实现
-	option websocket_allow_wan '0'
+	option websocket_allow_wan '0'          # 是否允许外网访问 WebSocket (0=禁止, 1=允许)
+	option websocket_auth_key ''            # WebSocket 连接密钥（留空则不验证）
 	
 	# 通知配置
 	option wechat_webhook ''

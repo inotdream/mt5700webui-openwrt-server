@@ -43,6 +43,170 @@ start_service() {
 		return 1
 	fi
 	
+	# 自动检测并添加 USB 串口设备 ID（如果需要）
+	detect_and_add_usb_serial() {
+		# 检查 option 驱动是否存在
+		if [ ! -d "/sys/bus/usb-serial/drivers/option1" ]; then
+			return 0
+		fi
+		
+		# 检查 lsusb 是否可用
+		if ! command -v lsusb >/dev/null 2>&1; then
+			return 0
+		fi
+		
+		# 支持的设备 VID:PID 列表（可根据需要添加）
+		local KNOWN_MODEMS="
+			3466:3301
+		"
+		
+		# 检测已连接的设备
+		for vid_pid in $KNOWN_MODEMS; do
+			if lsusb -d "$vid_pid" >/dev/null 2>&1; then
+				local vid="${vid_pid%:*}"
+				local pid="${vid_pid#*:}"
+				
+				# 检查设备是否已经被识别
+				if ! ls /dev/ttyUSB* >/dev/null 2>&1; then
+					# 尝试添加设备 ID
+					echo "$vid $pid" > /sys/bus/usb-serial/drivers/option1/new_id 2>/dev/null
+					if [ $? -eq 0 ]; then
+						logger -t at-webserver "已添加 USB 设备 ID: $vid:$pid"
+						sleep 1
+					fi
+				fi
+			fi
+		done
+	}
+	
+	detect_and_add_usb_serial
+	
+	# 配置防火墙规则（控制外网访问和模块访问限制）
+	setup_firewall() {
+		local allow_wan
+		local ws_port
+		local module_allow_wan
+		local restrict_module
+		local module_host
+		local module_port
+		
+		config_get_bool allow_wan config websocket_allow_wan 0
+		config_get ws_port config websocket_port 8765
+		config_get_bool module_allow_wan config network_allow_wan 0
+		config_get_bool restrict_module config network_restrict_access 0
+		config_get module_host config network_host '192.168.8.1'
+		config_get module_port config network_port '20249'
+		
+	# 删除旧的 WebSocket WAN 规则（阻止）
+	local rule_name="at_webserver_wan_block"
+	local rule_idx=$(uci show firewall | grep "\.name='$rule_name'" | cut -d'[' -f2 | cut -d']' -f1 | head -n1)
+	if [ -n "$rule_idx" ]; then
+		uci delete firewall.@rule[$rule_idx] 2>/dev/null
+	fi
+	
+	# 删除旧的 WebSocket WAN 规则（允许）
+	rule_name="at_webserver_wan_allow"
+	rule_idx=$(uci show firewall | grep "\.name='$rule_name'" | cut -d'[' -f2 | cut -d']' -f1 | head -n1)
+	if [ -n "$rule_idx" ]; then
+		uci delete firewall.@rule[$rule_idx] 2>/dev/null
+	fi
+		
+		# 删除旧的模块 LAN 访问限制规则
+		rule_name="at_module_restrict"
+		rule_idx=$(uci show firewall | grep "\.name='$rule_name'" | cut -d'[' -f2 | cut -d']' -f1 | head -n1)
+		if [ -n "$rule_idx" ]; then
+			uci delete firewall.@rule[$rule_idx] 2>/dev/null
+		fi
+		
+	# 删除旧的模块 WAN 访问限制规则（阻止）
+	rule_name="at_module_wan_block"
+	rule_idx=$(uci show firewall | grep "\.name='$rule_name'" | cut -d'[' -f2 | cut -d']' -f1 | head -n1)
+	if [ -n "$rule_idx" ]; then
+		uci delete firewall.@rule[$rule_idx] 2>/dev/null
+	fi
+	
+	# 删除旧的模块 WAN 访问规则（允许）
+	rule_name="at_module_wan_allow"
+	rule_idx=$(uci show firewall | grep "\.name='$rule_name'" | cut -d'[' -f2 | cut -d']' -f1 | head -n1)
+	if [ -n "$rule_idx" ]; then
+		uci delete firewall.@rule[$rule_idx] 2>/dev/null
+	fi
+	
+	uci commit firewall
+	
+	# 模块外网访问控制
+	if [ "$module_allow_wan" -eq 1 ]; then
+		# 允许外网访问模块，添加 ACCEPT 规则
+		uci add firewall rule >/dev/null
+		uci set firewall.@rule[-1].name="at_module_wan_allow"
+		uci set firewall.@rule[-1].src='wan'
+		uci set firewall.@rule[-1].dest='*'
+		uci set firewall.@rule[-1].dest_ip="$module_host"
+		uci set firewall.@rule[-1].dest_port="$module_port"
+		uci set firewall.@rule[-1].proto='tcp'
+		uci set firewall.@rule[-1].target='ACCEPT'
+		uci set firewall.@rule[-1].enabled='1'
+		logger -t at-webserver "已允许外网访问模块 AT 端口: $module_host:$module_port (警告: 不安全!)"
+	else
+		# 禁止外网访问模块，添加 REJECT 规则
+		uci add firewall rule >/dev/null
+		uci set firewall.@rule[-1].name="at_module_wan_block"
+		uci set firewall.@rule[-1].src='wan'
+		uci set firewall.@rule[-1].dest='*'
+		uci set firewall.@rule[-1].dest_ip="$module_host"
+		uci set firewall.@rule[-1].dest_port="$module_port"
+		uci set firewall.@rule[-1].proto='tcp'
+		uci set firewall.@rule[-1].target='REJECT'
+		uci set firewall.@rule[-1].enabled='1'
+		logger -t at-webserver "已禁止外网访问模块 AT 端口: $module_host:$module_port"
+	fi
+		
+	# WebSocket 外网访问控制
+	if [ "$allow_wan" -eq 1 ]; then
+		# 允许外网访问，添加 ACCEPT 规则
+		uci add firewall rule >/dev/null
+		uci set firewall.@rule[-1].name="at_webserver_wan_allow"
+		uci set firewall.@rule[-1].src='wan'
+		uci set firewall.@rule[-1].proto='tcp'
+		uci set firewall.@rule[-1].dest_port="$ws_port"
+		uci set firewall.@rule[-1].target='ACCEPT'
+		uci set firewall.@rule[-1].enabled='1'
+		logger -t at-webserver "已允许外网访问 WebSocket (端口 $ws_port)"
+	else
+		# 禁止外网访问，添加 REJECT 规则（更明确）
+		uci add firewall rule >/dev/null
+		uci set firewall.@rule[-1].name="at_webserver_wan_block"
+		uci set firewall.@rule[-1].src='wan'
+		uci set firewall.@rule[-1].proto='tcp'
+		uci set firewall.@rule[-1].dest_port="$ws_port"
+		uci set firewall.@rule[-1].target='REJECT'
+		uci set firewall.@rule[-1].enabled='1'
+		logger -t at-webserver "已禁止外网访问 WebSocket (端口 $ws_port)"
+	fi
+		
+		# 如果启用模块访问限制，阻止局域网其他设备访问模块
+		if [ "$restrict_module" -eq 1 ]; then
+			uci add firewall rule >/dev/null
+			uci set firewall.@rule[-1].name="at_module_restrict"
+			uci set firewall.@rule[-1].src='lan'
+			uci set firewall.@rule[-1].dest='*'
+			uci set firewall.@rule[-1].dest_ip="$module_host"
+			uci set firewall.@rule[-1].dest_port="$module_port"
+			uci set firewall.@rule[-1].proto='tcp'
+			uci set firewall.@rule[-1].target='REJECT'
+			uci set firewall.@rule[-1].enabled='1'
+			logger -t at-webserver "已限制模块访问: 仅路由器本身可访问 $module_host:$module_port"
+		else
+			logger -t at-webserver "模块访问: 允许局域网设备访问 $module_host:$module_port"
+		fi
+		
+		uci commit firewall
+		# 重新加载防火墙
+		/etc/init.d/firewall reload >/dev/null 2>&1
+	}
+	
+	setup_firewall
+	
 	# 确保没有旧进程在运行
 	killall -q -9 "$PROG_NAME" 2>/dev/null
 	sleep 1
@@ -72,6 +236,46 @@ stop_service() {
 	
 	# 清理 pidfile
 	rm -f /var/run/at-webserver.pid
+	
+	# 清理防火墙规则
+	# 清理 WebSocket WAN 阻止规则
+	local rule_name="at_webserver_wan_block"
+	local rule_idx=$(uci show firewall | grep "\.name='$rule_name'" | cut -d'[' -f2 | cut -d']' -f1 | head -n1)
+	if [ -n "$rule_idx" ]; then
+		uci delete firewall.@rule[$rule_idx] 2>/dev/null
+	fi
+	
+	# 清理 WebSocket WAN 允许规则
+	rule_name="at_webserver_wan_allow"
+	rule_idx=$(uci show firewall | grep "\.name='$rule_name'" | cut -d'[' -f2 | cut -d']' -f1 | head -n1)
+	if [ -n "$rule_idx" ]; then
+		uci delete firewall.@rule[$rule_idx] 2>/dev/null
+	fi
+	
+	# 清理模块 LAN 访问限制规则
+	rule_name="at_module_restrict"
+	rule_idx=$(uci show firewall | grep "\.name='$rule_name'" | cut -d'[' -f2 | cut -d']' -f1 | head -n1)
+	if [ -n "$rule_idx" ]; then
+		uci delete firewall.@rule[$rule_idx] 2>/dev/null
+	fi
+	
+	# 清理模块 WAN 阻止规则
+	rule_name="at_module_wan_block"
+	rule_idx=$(uci show firewall | grep "\.name='$rule_name'" | cut -d'[' -f2 | cut -d']' -f1 | head -n1)
+	if [ -n "$rule_idx" ]; then
+		uci delete firewall.@rule[$rule_idx] 2>/dev/null
+	fi
+	
+	# 清理模块 WAN 允许规则
+	rule_name="at_module_wan_allow"
+	rule_idx=$(uci show firewall | grep "\.name='$rule_name'" | cut -d'[' -f2 | cut -d']' -f1 | head -n1)
+	if [ -n "$rule_idx" ]; then
+		uci delete firewall.@rule[$rule_idx] 2>/dev/null
+	fi
+	
+	uci commit firewall
+	/etc/init.d/firewall reload >/dev/null 2>&1
+	logger -t at-webserver "已清理所有防火墙规则"
 	
 	sleep 1
 	logger -t at-webserver "服务已停止"
