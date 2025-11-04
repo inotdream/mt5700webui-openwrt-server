@@ -2,31 +2,40 @@
 	"luci-app-at-webserver": {
 		"description": "Grant UCI access for luci-app-at-webserver",
 		"read": {
-			"uci": [ "at-webserver" ],
+			"uci": [ "at-webserver", "firewall" ],
 			"ubus": {
+				"file": [ "list", "read", "stat", "exec" ],
+				"luci": [ "getInitList", "getRealtimeStats" ],
 				"service": [ "list", "get_data" ],
-				"file": [ "read", "stat", "exec", "list" ],
-				"luci": [ "getInitList", "getLogread" ]
+				"system": [ "info" ],
+				"uci": [ "get", "state", "configs" ]
 			},
 			"file": {
+				"/etc/config/at-webserver": [ "read", "stat" ],
+				"/etc/config/firewall": [ "read", "stat" ],
+				"/etc/init.d/at-webserver": [ "list", "read", "stat", "exec" ],
 				"/tmp/at-notifications.log": [ "read", "stat" ],
 				"/var/log/at-notifications.log": [ "read", "stat" ],
-				"/tmp/*": [ "read", "stat" ],
-				"/var/log/*": [ "read", "stat" ]
+				"/tmp/*": [ "list" ],
+				"/var/log/*": [ "list" ],
+				"/www/cgi-bin/at-ws-info": [ "exec" ],
+				"/www/cgi-bin/at-log-clear": [ "exec" ]
 			}
 		},
 		"write": {
-			"uci": [ "at-webserver" ],
+			"uci": [ "at-webserver", "firewall" ],
 			"ubus": {
-				"service": [ "set" ],
-				"file": [ "write", "exec", "remove" ],
-				"luci": [ "setInitAction" ]
+				"file": [ "write", "read", "stat", "exec", "remove" ],
+				"luci": [ "setInitAction" ],
+				"service": [ "set", "delete", "update" ],
+				"uci": [ "add", "set", "delete", "commit", "apply", "changes", "revert", "order" ]
 			},
 			"file": {
+				"/etc/config/at-webserver": [ "write", "read", "stat" ],
+				"/etc/config/firewall": [ "write", "read", "stat" ],
+				"/etc/init.d/at-webserver": [ "exec" ],
 				"/tmp/at-notifications.log": [ "write", "read", "stat" ],
-				"/var/log/at-notifications.log": [ "write", "read", "stat" ],
-				"/tmp/*": [ "write", "read", "stat" ],
-				"/var/log/*": [ "write", "stat" ]
+				"/var/log/at-notifications.log": [ "write", "read", "stat" ]
 			}
 		}
 	}

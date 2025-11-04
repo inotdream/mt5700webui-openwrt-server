@@ -45,38 +45,37 @@ start_service() {
 	
 	# 自动检测并添加 USB 串口设备 ID（如果需要）
 	detect_and_add_usb_serial() {
-		# 检查 option 驱动是否存在
-		if [ ! -d "/sys/bus/usb-serial/drivers/option1" ]; then
+		# 仅在发现 MT5700 且尚无 ttyUSB* 时处理
+		if ! lsusb -d 3466:3301 >/dev/null 2>&1; then
 			return 0
 		fi
-		
-		# 检查 lsusb 是否可用
-		if ! command -v lsusb >/dev/null 2>&1; then
+		if ls /dev/ttyUSB* >/dev/null 2>&1; then
 			return 0
 		fi
-		
-		# 支持的设备 VID:PID 列表（可根据需要添加）
-		local KNOWN_MODEMS="
-			3466:3301
-		"
-		
-		# 检测已连接的设备
-		for vid_pid in $KNOWN_MODEMS; do
-			if lsusb -d "$vid_pid" >/dev/null 2>&1; then
-				local vid="${vid_pid%:*}"
-				local pid="${vid_pid#*:}"
-				
-				# 检查设备是否已经被识别
-				if ! ls /dev/ttyUSB* >/dev/null 2>&1; then
-					# 尝试添加设备 ID
-					echo "$vid $pid" > /sys/bus/usb-serial/drivers/option1/new_id 2>/dev/null
-					if [ $? -eq 0 ]; then
-						logger -t at-webserver "已添加 USB 设备 ID: $vid:$pid"
-						sleep 1
-					fi
-				fi
-			fi
-		done
+
+		# 加载必要模块（忽略已加载）
+		modprobe usbserial 2>/dev/null || true
+		modprobe option 2>/dev/null || true
+		modprobe qcserial 2>/dev/null || true
+
+		# 兼容不同内核的 new_id 路径
+		local NEW_ID=""
+		[ -e /sys/bus/usb-serial/drivers/option/new_id ] && NEW_ID=/sys/bus/usb-serial/drivers/option/new_id
+		[ -z "$NEW_ID" ] && [ -e /sys/bus/usb-serial/drivers/option1/new_id ] && NEW_ID=/sys/bus/usb-serial/drivers/option1/new_id
+		if [ -z "$NEW_ID" ]; then
+			logger -t at-webserver "option(1) driver not ready, skip new_id"
+			return 0
+		fi
+
+		# 仅绑定一次
+		if ! grep -q "3466[[:space:]]\+3301" "$NEW_ID" 2>/dev/null; then
+			echo "3466 3301" > "$NEW_ID" 2>/dev/null && \
+				logger -t at-webserver "已添加 USB 设备 ID: 3466:3301 to $(basename $(dirname $NEW_ID))" || \
+				logger -t at-webserver "添加 USB 设备 ID 失败: 3466:3301"
+		fi
+
+		# 等待设备节点出现
+		sleep 1
 	}
 	
 	detect_and_add_usb_serial
