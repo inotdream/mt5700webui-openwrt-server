@@ -1,5 +1,8 @@
 
+为您准备了 已经编译好的版本自己安装依赖安装即可
 
+链接：https://www.123865.com/s/BwcjVv-PexFd?pwd=GweY#
+提取码：GweY
 
 <img width="2104" height="1326" alt="HT495J9_)2B7_F2{{PNV9R2" src="https://github.com/user-attachments/assets/229ee8de-6309-43c0-99a3-14cb36b770a2" />
 <img width="2455" height="1322" alt="D%P)4D)A($VUZOIYHT4Y1LB" src="https://github.com/user-attachments/assets/cff3c45c-7d5c-4c77-af75-8e16fe94a25b" />
