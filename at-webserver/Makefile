@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=at-webserver
-PKG_VERSION:=1.0.0
+PKG_VERSION:=1.0.3
 PKG_RELEASE:=1
 
 
