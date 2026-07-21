@@ -60,30 +60,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // URC 捕获任务
     let c_monitor = at_client.clone();
     tokio::spawn(async move {
+        let mut last_reconnect_attempt = std::time::Instant::now();
+        let mut was_connected = false;
         loop {
             let mut has_data = false;
             {
                 let mut conn = c_monitor.conn.lock().await;
                 if !conn.is_connected() {
-                    if let Ok(_) = conn.connect().await {
-                        println!("Module Connected.");
-                        drop(conn);
-                        let c_init = c_monitor.clone();
-                        tokio::spawn(async move { c_init.init_module().await });
+                    if was_connected {
+                        println!("[AT] 连接已断开，正在重连...");
+                        was_connected = false;
+                    }
+                    if last_reconnect_attempt.elapsed() >= Duration::from_secs(2) {
+                        last_reconnect_attempt = std::time::Instant::now();
+                        if let Ok(_) = conn.connect().await {
+                            println!("[AT] 连接已恢复");
+                            was_connected = true;
+                            drop(conn);
+                            let c_init = c_monitor.clone();
+                            tokio::spawn(async move { c_init.init_module().await });
+                        }
                     }
                 } else {
-                    if let Ok(data) = conn.receive().await {
-                        if !data.is_empty() {
-                            has_data = true;
-                            let text = String::from_utf8_lossy(&data).to_string();
-                            for line in text.lines() {
-                                let l = line.trim();
-                                if !l.is_empty() && !l.to_lowercase().contains("ping") {
-                                    if l.contains("^") || l.contains("+") {
-                                        println!("[URC DETECTED] <== {:?}", line);
-                                        let _ = c_monitor.urc_tx.send(line.to_string());
+                    match conn.receive().await {
+                        Ok(data) => {
+                            if !data.is_empty() {
+                                has_data = true;
+                                let text = String::from_utf8_lossy(&data).to_string();
+                                for line in text.lines() {
+                                    let l = line.trim();
+                                    if !l.is_empty() && !l.to_lowercase().contains("ping") {
+                                        if l.contains("^") || l.contains("+") {
+                                            println!("[URC DETECTED] <== {:?}", line);
+                                            let _ = c_monitor.urc_tx.send(line.to_string());
+                                        }
                                     }
                                 }
+                            }
+                        }
+                        Err(_) => {
+                            if was_connected {
+                                println!("[AT] 连接已断开，正在重连...");
+                                was_connected = false;
                             }
                         }
                     }

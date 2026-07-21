@@ -1,11 +1,25 @@
 use async_trait::async_trait;
 use std::error::Error;
+use std::io::ErrorKind;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 use crate::config::{NetworkConfig, SerialConfig};
+
+fn should_reset_connection(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        ErrorKind::BrokenPipe
+            | ErrorKind::ConnectionAborted
+            | ErrorKind::ConnectionReset
+            | ErrorKind::NotConnected
+            | ErrorKind::UnexpectedEof
+            | ErrorKind::TimedOut
+            | ErrorKind::WouldBlock
+    )
+}
 
 // ========== AT 连接抽象 ==========
 
@@ -45,7 +59,16 @@ impl ATConnection for SerialATConn {
 
     async fn send(&mut self, data: &[u8]) -> Result<usize, Box<dyn Error + Send + Sync>> {
         if let Some(s) = &mut self.stream {
-            return Ok(s.write(data).await?);
+            match s.write(data).await {
+                Ok(n) => return Ok(n),
+                Err(e) => {
+                    self.stream = None;
+                    if should_reset_connection(&e) {
+                        return Err("Disconnected".into());
+                    }
+                    return Err(Box::new(e));
+                }
+            }
         }
         Err("Disconnected".into())
     }
@@ -53,9 +76,27 @@ impl ATConnection for SerialATConn {
     async fn receive(&mut self) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         if let Some(s) = &mut self.stream {
             let mut buf = vec![0u8; 1024];
-            let n = timeout(Duration::from_millis(25), s.read(&mut buf)).await??;
-            buf.truncate(n);
-            return Ok(buf);
+            match timeout(Duration::from_millis(25), s.read(&mut buf)).await {
+                Ok(Ok(n)) => {
+                    if n == 0 {
+                        self.stream = None;
+                        return Err("Disconnected".into());
+                    }
+                    buf.truncate(n);
+                    return Ok(buf);
+                }
+                Ok(Err(e)) => {
+                    self.stream = None;
+                    if should_reset_connection(&e) {
+                        return Err("Disconnected".into());
+                    }
+                    return Err(Box::new(e));
+                }
+                Err(_) => {
+                    self.stream = None;
+                    return Err("Disconnected".into());
+                }
+            }
         }
         Err("Disconnected".into())
     }
@@ -96,7 +137,16 @@ impl ATConnection for NetworkATConn {
 
     async fn send(&mut self, data: &[u8]) -> Result<usize, Box<dyn Error + Send + Sync>> {
         if let Some(s) = &mut self.stream {
-            return Ok(s.write(data).await?);
+            match s.write(data).await {
+                Ok(n) => return Ok(n),
+                Err(e) => {
+                    self.stream = None;
+                    if should_reset_connection(&e) {
+                        return Err("Disconnected".into());
+                    }
+                    return Err(Box::new(e));
+                }
+            }
         }
         Err("Disconnected".into())
     }
@@ -104,9 +154,27 @@ impl ATConnection for NetworkATConn {
     async fn receive(&mut self) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         if let Some(s) = &mut self.stream {
             let mut buf = vec![0u8; 1024];
-            let n = timeout(Duration::from_millis(25), s.read(&mut buf)).await??;
-            buf.truncate(n);
-            return Ok(buf);
+            match timeout(Duration::from_millis(25), s.read(&mut buf)).await {
+                Ok(Ok(n)) => {
+                    if n == 0 {
+                        self.stream = None;
+                        return Err("Disconnected".into());
+                    }
+                    buf.truncate(n);
+                    return Ok(buf);
+                }
+                Ok(Err(e)) => {
+                    self.stream = None;
+                    if should_reset_connection(&e) {
+                        return Err("Disconnected".into());
+                    }
+                    return Err(Box::new(e));
+                }
+                Err(_) => {
+                    self.stream = None;
+                    return Err("Disconnected".into());
+                }
+            }
         }
         Err("Disconnected".into())
     }
