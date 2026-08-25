@@ -4,8 +4,8 @@ START=99
 STOP=10
 
 USE_PROCD=1
-PROG=/usr/bin/at-server.py
-PROG_NAME="at-server.py"
+PROG=/usr/bin/at-webserver
+PROG_NAME="at-webserver"
 
 # 加载 UCI 函数库（必须在文件顶部）
 . /lib/functions.sh
@@ -29,53 +29,61 @@ start_service() {
 		return 1
 	fi
 	
-	# 检查 Python 脚本是否存在
-	if [ ! -f "$PROG" ]; then
-		logger -t at-webserver "错误：找不到脚本文件 $PROG"
+	# 检查可执行文件是否存在
+	if [ ! -x "$PROG" ]; then
+		logger -t at-webserver "错误：找不到可执行文件 $PROG"
 		echo "Error: $PROG not found"
 		return 1
 	fi
 	
-	# 检查 Python3 是否存在
-	if ! command -v python3 >/dev/null 2>&1; then
-		logger -t at-webserver "错误：python3 未安装"
-		echo "Error: python3 not found"
-		return 1
-	fi
-	
-	# 自动检测并添加 USB 串口设备 ID（如果需要）
+	# 在缺少内建 VID/PID 匹配的内核上，运行时把 MT5700 绑到 USB 串口驱动。
+	#
+	# 只在串口模式下做这件事。用 new_id 强行按 VID/PID 匹配会让串口驱动尝试
+	# 认领该设备的所有接口，包括 ECM/NCM 网卡接口——网络模式下根本用不到
+	# ttyUSB，却可能把 WAN 网卡抢没了。
+	# 正确做法是按接口描述符匹配，编进内核，见 docs/mt5700-内核驱动集成.md。
 	detect_and_add_usb_serial() {
-		# 仅在发现 MT5700 且尚无 ttyUSB* 时处理
-		if ! lsusb -d 3466:3301 >/dev/null 2>&1; then
+		local conn_type
+		config_get conn_type config connection_type 'NETWORK'
+		if [ "$conn_type" != "SERIAL" ]; then
 			return 0
 		fi
+
+		if ! lsusb -d 3466:3301 >/dev/null 2>&1; then
+			logger -t at-webserver "未检测到 MT5700 (3466:3301)，跳过串口驱动绑定"
+			return 0
+		fi
+
+		# 已经有 ttyUSB 说明驱动已正确匹配，不要再动
 		if ls /dev/ttyUSB* >/dev/null 2>&1; then
 			return 0
 		fi
 
-		# 加载必要模块（忽略已加载）
 		modprobe usbserial 2>/dev/null || true
 		modprobe option 2>/dev/null || true
-		modprobe qcserial 2>/dev/null || true
 
-		# 兼容不同内核的 new_id 路径
-		local NEW_ID=""
-		[ -e /sys/bus/usb-serial/drivers/option/new_id ] && NEW_ID=/sys/bus/usb-serial/drivers/option/new_id
-		[ -z "$NEW_ID" ] && [ -e /sys/bus/usb-serial/drivers/option1/new_id ] && NEW_ID=/sys/bus/usb-serial/drivers/option1/new_id
-		if [ -z "$NEW_ID" ]; then
-			logger -t at-webserver "option(1) driver not ready, skip new_id"
-			return 0
-		fi
+		# option 是厂商文档推荐的驱动；usbserial 的 generic 作为兜底
+		# （对应文档 11.5 的手动加载方法）。new_id 是只写的，无法先读出来
+		# 判断是否已写过，所以直接写并用 ttyUSB 是否出现来判断结果。
+		local drv new_id
+		for drv in option option1 generic; do
+			new_id="/sys/bus/usb-serial/drivers/$drv/new_id"
+			[ -w "$new_id" ] || continue
 
-		# 仅绑定一次
-		if ! grep -q "3466[[:space:]]\+3301" "$NEW_ID" 2>/dev/null; then
-			echo "3466 3301" > "$NEW_ID" 2>/dev/null && \
-				logger -t at-webserver "已添加 USB 设备 ID: 3466:3301 to $(basename $(dirname $NEW_ID))" || \
-				logger -t at-webserver "添加 USB 设备 ID 失败: 3466:3301"
-		fi
+			if ! echo "3466 3301" > "$new_id" 2>/dev/null; then
+				logger -t at-webserver "写入 $drv/new_id 失败"
+				continue
+			fi
 
-		# 等待设备节点出现
-		sleep 1
+			sleep 1
+			if ls /dev/ttyUSB* >/dev/null 2>&1; then
+				logger -t at-webserver "已通过 $drv 绑定 3466:3301，串口节点已就绪"
+				return 0
+			fi
+			logger -t at-webserver "$drv 绑定后仍无 ttyUSB 节点，尝试下一个驱动"
+		done
+
+		logger -t at-webserver "警告：未能创建 ttyUSB 节点，请确认内核已编入 USB 串口驱动"
 	}
 	
 	detect_and_add_usb_serial
@@ -206,16 +214,16 @@ start_service() {
 	
 	setup_firewall
 	
-	# 确保没有旧进程在运行
-	killall -q -9 "$PROG_NAME" 2>/dev/null
-	sleep 1
+	# 清理可能残留的旧进程（含 1.x 的 Python 版本），用 TERM 让其正常退出
+	killall -q at-server.py 2>/dev/null
+	killall -q "$PROG_NAME" 2>/dev/null
 	
 	logger -t at-webserver "配置 procd 实例..."
 	echo "Starting AT WebServer..."
 	
 	# 启动 procd 服务（不指定实例名，使用默认 instance1）
 	procd_open_instance
-	procd_set_param command python3 "$PROG"
+	procd_set_param command "$PROG"
 	procd_set_param respawn ${respawn_threshold:-3600} ${respawn_timeout:-5} ${respawn_retry:-5}
 	procd_set_param stdout 1
 	procd_set_param stderr 1
@@ -230,8 +238,8 @@ stop_service() {
 	logger -t at-webserver "停止服务..."
 	echo "Stopping AT WebServer..."
 	
-	# 强制杀死所有相关进程
-	killall -q -9 "$PROG_NAME" 2>/dev/null
+	# 交给 procd 停止实例；这里只发 TERM 兜底，让服务能优雅关闭连接
+	killall -q "$PROG_NAME" 2>/dev/null
 	
 	# 清理 pidfile
 	rm -f /var/run/at-webserver.pid
@@ -288,12 +296,11 @@ reload_service() {
 	# 提交最新配置
 	uci -q commit at-webserver
 	
-	# 强制停止所有相关进程
-	killall -q -9 "$PROG_NAME" 2>/dev/null
+	killall -q "$PROG_NAME" 2>/dev/null
 	rm -f /var/run/at-webserver.pid
 	
-	# 等待进程完全停止
-	sleep 3
+	# 等待进程退出
+	sleep 2
 	
 	# 重新启动服务
 	start_service
