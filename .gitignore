@@ -9,3 +9,6 @@ __pycache__/
 # 编辑器与系统文件
 .DS_Store
 *.swp
+
+# 厂商 AT 命令手册（版权文档，本地参考用，不入库）
+at-webserver/*.pdf
