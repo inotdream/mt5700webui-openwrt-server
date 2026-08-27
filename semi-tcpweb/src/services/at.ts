@@ -1686,44 +1686,4 @@ export class ATService {
   public async queryCallState(): Promise<ATResponse> {
     return this.sendCommand('AT+CLCC');
   }
-
-  // 配置音频参数
-  public async configureAudio(
-    mode: number,
-    device: number,
-    volume: number,
-    micGain: number,
-    spkGain: number,
-  ): Promise<ATResponse> {
-    return this.sendCommand(`AT+QCFG="audio",${mode},${device},${volume},${micGain},${spkGain}`);
-  }
-
-  // 配置音频通道
-  public async configureAudioChannel(channel: number, mode: number): Promise<ATResponse> {
-    return this.sendCommand(`AT+QCFG="audio_channel",${channel},${mode}`);
-  }
-
-  // 配置音频格式
-  public async configureAudioFormat(
-    format: number,
-    sampleRate: number,
-    bitsPerSample: number,
-  ): Promise<ATResponse> {
-    return this.sendCommand(`AT+QCFG="audio_format",${format},${sampleRate},${bitsPerSample}`);
-  }
-
-  // 查询音频配置
-  public async queryAudioConfig(): Promise<ATResponse> {
-    return this.sendCommand('AT+QCFG="audio"');
-  }
-
-  // 查询音频通道配置
-  public async queryAudioChannelConfig(): Promise<ATResponse> {
-    return this.sendCommand('AT+QCFG="audio_channel"');
-  }
-
-  // 查询音频格式配置
-  public async queryAudioFormatConfig(): Promise<ATResponse> {
-    return this.sendCommand('AT+QCFG="audio_format"');
-  }
 }
