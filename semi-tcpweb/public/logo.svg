@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">MT5700 network mark</title>
+  <desc id="desc">An original antenna and network signal symbol for the MT5700M-CN interface.</desc>
+  <path
+    fill="#646973"
+    d="M20.8 8.4A27.5 27.5 0 0 0 5.5 32c0 10.6 6 20.3 15.5 24.9l4.2-8.6A18.9 18.9 0 0 1 14.9 32c0-6.5 3.3-12.5 8.9-16Z"
+  />
+  <path
+    fill="#c7000b"
+    d="M43.2 8.4A27.5 27.5 0 0 1 58.5 32c0 10.6-6 20.3-15.5 24.9l-4.2-8.6A18.9 18.9 0 0 0 49.1 32c0-6.5-3.3-12.5-8.9-16Z"
+  />
+  <path
+    fill="#c7000b"
+    fill-rule="evenodd"
+    d="M32 4.5 41.2 29h-4.8v24.5h-8.8V29h-4.8Zm0 17.4a3.2 3.2 0 1 0 0 6.4 3.2 3.2 0 0 0 0-6.4Z"
+    clip-rule="evenodd"
+  />
+</svg>
