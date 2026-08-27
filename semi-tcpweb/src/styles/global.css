@@ -1007,7 +1007,7 @@ textarea[readonly],
   display: grid;
   gap: 10px 18px;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  margin-top: 6px;
+  margin-top: 12px;
 }
 
 .system-summary-body {

@@ -591,14 +591,15 @@ const NetworkInfo: React.FC = () => {
                   </div>
                 </div>
                 <div className="metric-row">
+                  {/* 不带小字提示：三列窄格子里"参考信号接收功率"会折行，把整块挤乱，
+                      标签本身已经写明指标名，冗余提示不值一次换行 */}
                   <Metric
                     size="sm"
                     label={nr || lte ? 'RSRP (dBm)' : cell.sysMode === 'WCDMA' ? 'RSCP (dBm)' : 'RSSI (dBm)'}
-                    hint={nr || lte ? '参考信号接收功率' : '接收功率'}
                     value={cell.rscp || '—'}
                     color={rsrpColor(cell.rscp)}
                   />
-                  <Metric size="sm" label="SINR (dB)" hint="信噪比" value={cell.sinr || '—'} />
+                  <Metric size="sm" label="SINR (dB)" value={cell.sinr || '—'} />
                   {/* 手册 13.5：^HCSQ 在 NR 下没有 RSSI 字段，5G/EN-DC 显示 RSSI 只会是"—"。
                       有 NR 就显示 RSRQ；纯 LTE 且真拿到了 RSSI 才显示 RSSI。 */}
                   <Metric
