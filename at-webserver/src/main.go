@@ -58,6 +58,8 @@ func run(log *Logger, verbose bool) error {
 	notifier := NewNotifier(cfg.Notification, log)
 	dispatcher := NewDispatcher(client, notifier, ws, log)
 	scheduler := NewScheduler(cfg.Schedule, client, notifier, log)
+	ws.AttachScheduler(scheduler)
+	ws.SetScanTimeout(cfg.WebSocket.ScanTimeout)
 
 	// 先同步绑定端口：端口被占用属于启动失败，应当立刻报错而不是异步才发现。
 	ln, err := ws.Listen(ctx, cfg.WebSocket.Port)

@@ -54,6 +54,8 @@ type WebSocketConfig struct {
 	Port     int
 	AuthKey  string
 	AllowWAN bool
+	// ScanTimeout 是一次 ^CELLSCAN 全网扫频允许跑多久，全 Band 扫描很慢。
+	ScanTimeout time.Duration
 }
 
 type ScheduleConfig struct {
@@ -96,7 +98,7 @@ func defaultConfig() Config {
 		Notification: NotificationConfig{
 			Types: NotifyTypes{SMS: true, Call: true, MemoryFull: true, Signal: true},
 		},
-		WebSocket: WebSocketConfig{Port: 8765},
+		WebSocket: WebSocketConfig{Port: 8765, ScanTimeout: defaultScanTimeout},
 		Schedule: ScheduleConfig{
 			CheckInterval:  60 * time.Second,
 			NoServiceLimit: 180 * time.Second,
@@ -223,6 +225,9 @@ func LoadConfig(ctx context.Context) (Config, error) {
 	cfg.WebSocket.Port = u.int("websocket_port", cfg.WebSocket.Port)
 	cfg.WebSocket.AuthKey = u.str("websocket_auth_key", "")
 	cfg.WebSocket.AllowWAN = u.bool("websocket_allow_wan", false)
+	// 第三个参数是下限而不是缺省值：写成 defaultScanTimeout 的话，用户配的任何
+	// 小于 3 分钟的值都会被悄悄抬回 3 分钟，这个选项就等于不起作用。
+	cfg.WebSocket.ScanTimeout = u.seconds("cellscan_timeout", cfg.WebSocket.ScanTimeout, 10*time.Second)
 
 	cfg.Notification.WeChatWebhook = u.str("wechat_webhook", "")
 	cfg.Notification.LogFile = u.str("log_file", "")

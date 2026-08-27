@@ -22,6 +22,30 @@ type fakeModem struct {
 	mu       sync.Mutex
 	conn     net.Conn
 	received []string
+	scanning bool
+	scanStop chan struct{}
+	// scanDropsService 模拟真机行为：扫频会把驻留的小区打散，
+	// 扫描中和刚扫完的一小段时间里注册状态是"搜网中"。
+	scanDropsService bool
+	scanEndedAt      time.Time
+}
+
+func (m *fakeModem) unregisterWhileScanning() {
+	m.mu.Lock()
+	m.scanDropsService = true
+	m.mu.Unlock()
+}
+
+// registrationReply 按当前是否在扫频返回不同的注册状态。
+func (m *fakeModem) registrationReply(prefix string) string {
+	m.mu.Lock()
+	searching := m.scanDropsService && (m.scanning || time.Since(m.scanEndedAt) < 300*time.Millisecond)
+	m.mu.Unlock()
+	if searching {
+		// 27.007 <stat>=2：没有注册，正在搜网。
+		return "\r\n" + prefix + ": 2,2\r\n\r\nOK\r\n"
+	}
+	return "\r\n" + prefix + `: 2,1,"5A01","1F23",7` + "\r\n\r\nOK\r\n"
 }
 
 func newFakeModem(t *testing.T) *fakeModem {
@@ -73,12 +97,79 @@ func (m *fakeModem) serve(conn net.Conn) {
 
 		// 真实模组默认开回显，这里一并模拟，用来验证回显过滤。
 		m.write(conn, cmd+"\r\n")
+		if m.handleScan(conn, cmd) {
+			continue
+		}
 		m.write(conn, m.reply(cmd))
 	}
 }
 
+// handleScan 模拟 ^CELLSCAN：结果分多行慢慢吐，收到 abcd 立即收尾。
+// 返回 true 表示这条命令已由扫频逻辑处理，不再走固定应答表。
+func (m *fakeModem) handleScan(conn net.Conn, cmd string) bool {
+	switch {
+	case strings.HasPrefix(cmd, "AT^CELLSCAN"):
+		m.mu.Lock()
+		if m.scanning {
+			m.mu.Unlock()
+			m.write(conn, "\r\nERROR\r\n")
+			return true
+		}
+		m.scanning = true
+		stop := make(chan struct{})
+		m.scanStop = stop
+		m.mu.Unlock()
+		go m.emitScan(conn, stop)
+		return true
+	case cmd == cellScanAbortToken:
+		m.mu.Lock()
+		stop := m.scanStop
+		m.scanStop = nil
+		m.mu.Unlock()
+		if stop != nil {
+			close(stop)
+		}
+		return true
+	}
+	return false
+}
+
+func (m *fakeModem) emitScan(conn net.Conn, stop chan struct{}) {
+	cells := []string{
+		`^CELLSCAN: 3,"46000",504990,334,29,5A01,1F23,,,,1,-85,-11,20,`,
+		`^CELLSCAN: 3,"46000",627264,201,4E,5A01,1F24,,,,1,-95,-13,12,`,
+		`^CELLSCAN: 2,"46001",1850,177,3,5A02,2F10,-98,,,,,,,60`,
+	}
+	for _, cell := range cells {
+		select {
+		case <-stop:
+			m.finishScan(conn)
+			return
+		case <-time.After(120 * time.Millisecond):
+		}
+		m.write(conn, "\r\n"+cell+"\r\n")
+	}
+	m.finishScan(conn)
+}
+
+// finishScan 对应手册里"打断完成后输出 OK，按照扫描完成处理"。
+func (m *fakeModem) finishScan(conn net.Conn) {
+	m.mu.Lock()
+	m.scanning = false
+	m.scanStop = nil
+	m.scanEndedAt = time.Now()
+	m.mu.Unlock()
+	m.write(conn, "\r\nOK\r\n")
+}
+
 func (m *fakeModem) reply(cmd string) string {
 	switch {
+	case cmd == "AT+CREG?":
+		return m.registrationReply("+CREG")
+	case cmd == "AT+CEREG?":
+		return m.registrationReply("+CEREG")
+	case cmd == "AT+C5GREG?":
+		return m.registrationReply("+C5GREG")
 	case cmd == "AT+CNMI?":
 		return "\r\n+CNMI: 2,1,0,2,0\r\n\r\nOK\r\n"
 	case cmd == "AT+CMGF?":
@@ -127,9 +218,10 @@ func (m *fakeModem) commands() []string {
 
 // testRig 把被测服务完整拉起来：假模组 + ATClient + Dispatcher + WebSocket 服务。
 type testRig struct {
-	modem *fakeModem
-	ws    *WSServer
-	addr  string
+	modem  *fakeModem
+	ws     *WSServer
+	client *ATClient
+	addr   string
 }
 
 func newTestRig(t *testing.T, authKey string, notify NotificationConfig) *testRig {
@@ -173,7 +265,7 @@ func newTestRig(t *testing.T, authKey string, notify NotificationConfig) *testRi
 		return client.Connected() && len(modem.commands()) >= 3
 	}, "AT 初始化未完成")
 
-	return &testRig{modem: modem, ws: ws, addr: ln.Addr().String()}
+	return &testRig{modem: modem, ws: ws, client: client, addr: ln.Addr().String()}
 }
 
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool, msg string) {
@@ -199,9 +291,10 @@ func (r *testRig) dial(t *testing.T) *websocket.Conn {
 }
 
 // readText 读一条文本消息，跳过服务端 30 秒心跳的 "ping"。
+// 超时给得宽一些：-race 下整体慢很多，5 秒会偶发误判成失败。
 func readText(t *testing.T, conn *websocket.Conn) string {
 	t.Helper()
-	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	for {
 		_, payload, err := conn.ReadMessage()
 		if err != nil {
@@ -477,7 +570,7 @@ func TestNightWindowCrossesMidnight(t *testing.T) {
 	}
 	for _, c := range cases {
 		at := time.Date(2025, 8, 25, c.hour, c.min, 0, 0, time.Local)
-		if got := s.isNight(at); got != c.night {
+		if got := s.isNight(s.Config(), at); got != c.night {
 			t.Errorf("%02d:%02d isNight = %v, 期望 %v", c.hour, c.min, got, c.night)
 		}
 	}

@@ -17,6 +17,7 @@ config at-webserver 'config'
 	option websocket_port '8765'
 	option websocket_allow_wan '0'          # 是否允许外网访问 WebSocket (0=禁止, 1=允许)
 	option websocket_auth_key ''            # WebSocket 连接密钥（留空则不验证）
+	option cellscan_timeout '180'           # 一次 ^CELLSCAN 全网扫频允许运行的秒数（下限 10）
 	
 	# 通知配置
 	option wechat_webhook ''

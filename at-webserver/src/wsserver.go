@@ -41,6 +41,10 @@ type WSServer struct {
 	client  *ATClient
 	log     *Logger
 	authKey string
+	sched   *Scheduler
+
+	scan        cellScanState
+	scanTimeout time.Duration
 
 	mu      sync.RWMutex
 	clients map[*wsClient]struct{}
@@ -52,6 +56,18 @@ func NewWSServer(client *ATClient, authKey string, log *Logger) *WSServer {
 		log:     log,
 		authKey: authKey,
 		clients: make(map[*wsClient]struct{}),
+	}
+}
+
+// AttachScheduler 让 WebUI 能通过 WebSocket 读写定时锁频配置。
+func (s *WSServer) AttachScheduler(sched *Scheduler) {
+	s.sched = sched
+}
+
+// SetScanTimeout 设置一次 ^CELLSCAN 允许跑多久。
+func (s *WSServer) SetScanTimeout(d time.Duration) {
+	if d > 0 {
+		s.scanTimeout = d
 	}
 }
 
@@ -307,6 +323,20 @@ func (s *WSServer) runCommand(command string) atCommandResponse {
 			kind = "1"
 		}
 		return okResponse("+CONNECT: " + kind + "\r\nOK")
+	}
+
+	// AT+SCHED? / AT+SCHED= 同样不是真命令，用来读写定时锁频配置。
+	if resp := s.handleScheduleCommand(command); resp != nil {
+		return *resp
+	}
+
+	// 扫频要跑几分钟，单独走异步通路，否则会把这条读循环和命令锁一起占死。
+	if resp := s.handleCellScanCommand(command); resp != nil {
+		return *resp
+	}
+
+	if s.scanInProgress() {
+		return *errResponse("正在扫频，模组暂时无法响应其它命令，请先取消扫频")
 	}
 
 	command = normalizeSyscfgex(command)

@@ -115,8 +115,11 @@ func (n *Notifier) enabled(kind NotifyKind) bool {
 }
 
 // Notify 记录一条事件。日志立即落盘，企业微信进入合并队列。
+//
+// 允许 n 为 nil：调用方多在后台 goroutine 里（定时锁频、上报分发），
+// 这里一旦 panic 整个服务进程都会退出，不值得为一条通知冒这个险。
 func (n *Notifier) Notify(msg Notification) {
-	if !n.enabled(msg.Kind) {
+	if n == nil || !n.enabled(msg.Kind) {
 		return
 	}
 

@@ -83,9 +83,15 @@ func (d *Dispatcher) Run(ctx context.Context) {
 			if u.broadcast {
 				d.ws.Broadcast(wsPush{Type: "raw_data", Data: u.line})
 			}
-			d.handle(ctx, u.line)
+			d.safeHandle(ctx, u.line)
 		}
 	}
+}
+
+// safeHandle 保证某一条上报解析失败时只丢这一条，不会拖垮整个上报分发。
+func (d *Dispatcher) safeHandle(ctx context.Context, line string) {
+	defer guard(d.log, "主动上报处理")
+	d.handle(ctx, line)
 }
 
 // handle 按固定优先级找到第一个能处理该行的处理器，与旧实现的顺序一致。

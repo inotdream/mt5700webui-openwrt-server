@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,31 +21,43 @@ var lteBandARFCN = map[int][2]int{
 	43: {43590, 45589}, 66: {66436, 67335},
 }
 
-// nrBandARFCN 是 3GPP TS 38.104 主要频段的 NR-ARFCN 范围。
+// nrBandARFCN 是 3GPP TS 38.104 主要频段的 NR-ARFCN 下行范围。
+// 注意 NR-ARFCN 与 LTE 的 EARFCN 是两套完全不同的编号：sub-3GHz 段
+// ARFCN = 频率/5kHz，3GHz 以上段 ARFCN = 600000 + (频率-3000MHz)/15kHz。
 var nrBandARFCN = map[int][2]int{
-	1: {0, 599}, 3: {1200, 1949}, 5: {2400, 2649}, 7: {2750, 3449}, 8: {3450, 3799},
-	12: {5010, 5179}, 20: {6150, 6449}, 25: {8040, 8689}, 28: {9210, 9659},
-	34: {20167, 20265}, 38: {37750, 38249}, 39: {38250, 38649}, 40: {38650, 39649},
-	41: {39650, 41589}, 42: {41590, 43589}, 43: {43590, 45589}, 48: {55240, 56739},
-	66: {66436, 67335}, 71: {132600, 133189}, 77: {620000, 680000},
-	78: {620000, 680000}, 79: {440000, 500000},
-	257: {2016667, 2079166}, 258: {2016667, 2079166},
-	260: {2016667, 2079166}, 261: {2016667, 2079166},
+	1: {422000, 434000}, 2: {386000, 398000}, 3: {361000, 376000},
+	5: {173800, 178800}, 7: {524000, 538000}, 8: {185000, 192000},
+	12: {145800, 149200}, 20: {158200, 164200}, 25: {386000, 399000},
+	28: {151600, 160600}, 34: {402000, 405000}, 38: {514000, 524000},
+	39: {376000, 384000}, 40: {460000, 480000}, 41: {499200, 537999},
+	48: {636667, 646666}, 66: {422000, 440000}, 71: {123400, 130400},
+	77: {620000, 680000}, 78: {620000, 653333}, 79: {693334, 733333},
+	257: {2054166, 2104165}, 258: {2016667, 2070832},
+	260: {2229166, 2279165}, 261: {2070833, 2084999},
 }
 
-// nr15kHzBands 里的频段按 15kHz 子载波间隔处理，其余默认 30kHz。
-var nr15kHzBands = map[int]bool{28: true, 71: true}
+// nr30kHzBands 是 SSB 默认按 30kHz 子载波间隔的频段（sub-6 的 TDD 中高频段），
+// nrMmWaveBands 走 120kHz，其余（FDD 与低频段）按 15kHz。
+var nr30kHzBands = map[int]bool{41: true, 48: true, 77: true, 78: true, 79: true}
+var nrMmWaveBands = map[int]bool{257: true, 258: true, 260: true, 261: true}
 
 // Scheduler 按时段切换锁频设置，并在长时间无服务时自动解锁恢复。
+// 配置可以在运行期被 WebUI 改写，因此 cfg 与运行状态都由 mu 保护。
 type Scheduler struct {
-	cfg      ScheduleConfig
 	client   *ATClient
 	notifier *Notifier
 	log      *Logger
 
+	mu  sync.RWMutex
+	cfg ScheduleConfig
+
 	lastServiceAt time.Time
 	currentMode   string
 	switchCount   int
+	lastApplied   lockPair
+	applied       bool
+	lastSwitchAt  time.Time
+	announced     bool
 }
 
 func NewScheduler(cfg ScheduleConfig, client *ATClient, notifier *Notifier, log *Logger) *Scheduler {
@@ -56,25 +70,88 @@ func NewScheduler(cfg ScheduleConfig, client *ATClient, notifier *Notifier, log 
 	}
 }
 
+// Config 返回当前生效的配置副本。
+func (s *Scheduler) Config() ScheduleConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg
+}
+
+// SetConfig 热替换配置。下一个检测周期就会按新配置判断是否需要重新下发，
+// 不需要重启服务，也不会打断当前的 WebSocket 连接。
+func (s *Scheduler) SetConfig(cfg ScheduleConfig) {
+	s.mu.Lock()
+	s.cfg = cfg
+	s.announced = false
+	s.mu.Unlock()
+}
+
 func (s *Scheduler) Run(ctx context.Context) {
-	if !s.cfg.Enabled {
+	// 即使当前未启用也要保持轮询：用户可能在 WebUI 里随时打开开关，
+	// 早期实现在这里直接 return，导致开关打开后必须重启服务才生效。
+	for {
+		cfg := s.Config()
+		if !sleepCtx(ctx, cfg.CheckInterval) {
+			return
+		}
+
+		cfg = s.Config()
+		s.announce(cfg)
+		if !cfg.Enabled || !s.client.Connected() {
+			continue
+		}
+
+		// 扫频会独占模组几分钟，期间注册状态查不到、扫描本身也会让模组暂时离网。
+		// 如果照常计时，一次全频段扫描就足以让"无服务超时"到点，把用户锁好的
+		// 频段自动解开。这里跳过这一轮，并把计时起点推到现在，给网络恢复留时间。
+		if s.client.LongCommandActive() {
+			s.mu.Lock()
+			s.lastServiceAt = time.Now()
+			s.mu.Unlock()
+			s.log.Debugf("扫频占用模组，跳过本轮定时锁频检测")
+			continue
+		}
+
+		s.safeTick(ctx, cfg)
+	}
+}
+
+// scanRecoveryGrace 是扫频结束后留给模组重新驻留的时间，这段时间内不做
+// 无服务判定。代价只是自动解锁最多晚这么久触发，比误解锁划算得多。
+const scanRecoveryGrace = 60 * time.Second
+
+// modemBusyRecently 判断模组是不是正被扫频占着、或者刚扫完还没缓过来。
+func (s *Scheduler) modemBusyRecently() bool {
+	if s.client.LongCommandActive() {
+		return true
+	}
+	end := s.client.LongCommandEndedAt()
+	return !end.IsZero() && time.Since(end) < scanRecoveryGrace
+}
+
+// safeTick 保证单次检测出问题时只丢这一轮，不会让整个服务退出。
+func (s *Scheduler) safeTick(ctx context.Context, cfg ScheduleConfig) {
+	defer guard(s.log, "定时锁频")
+	s.tick(ctx, cfg)
+}
+
+// announce 在配置变化后打印一次当前编排，避免每个周期都刷日志。
+func (s *Scheduler) announce(cfg ScheduleConfig) {
+	s.mu.Lock()
+	if s.announced {
+		s.mu.Unlock()
+		return
+	}
+	s.announced = true
+	s.mu.Unlock()
+
+	if !cfg.Enabled {
 		s.log.Infof("定时锁频未启用")
 		return
 	}
-
-	s.log.Infof("定时锁频已启用：检测间隔 %s，无服务超时 %s", s.cfg.CheckInterval, s.cfg.NoServiceLimit)
+	s.log.Infof("定时锁频已启用：检测间隔 %s，无服务超时 %s", cfg.CheckInterval, cfg.NoServiceLimit)
 	s.log.Infof("  夜间模式 %s (%s-%s)，日间模式 %s",
-		enabledText(s.cfg.NightEnabled), s.cfg.NightStart, s.cfg.NightEnd, enabledText(s.cfg.DayEnabled))
-
-	for {
-		if !sleepCtx(ctx, s.cfg.CheckInterval) {
-			return
-		}
-		if !s.client.Connected() {
-			continue
-		}
-		s.tick(ctx)
-	}
+		enabledText(cfg.NightEnabled), cfg.NightStart, cfg.NightEnd, enabledText(cfg.DayEnabled))
 }
 
 func enabledText(b bool) string {
@@ -84,37 +161,68 @@ func enabledText(b bool) string {
 	return "禁用"
 }
 
-func (s *Scheduler) tick(ctx context.Context) {
-	target := s.targetMode(time.Now())
+func (s *Scheduler) tick(ctx context.Context, cfg ScheduleConfig) {
+	target := s.targetMode(cfg, time.Now())
+	want := s.lockFor(cfg, target)
 
-	switch {
-	case target != "" && target != s.currentMode:
-		s.log.Infof("时段切换: %s -> %s", orNone(s.currentMode), target)
-		s.applyLock(ctx, s.lockFor(target), target)
+	s.mu.RLock()
+	mode, applied, last := s.currentMode, s.applied, s.lastApplied
+	s.mu.RUnlock()
+
+	// 除了跨时段，配置被改写导致目标锁参数变化时也要重新下发，
+	// 否则在 WebUI 里改完当前时段的频段要等到下次换时段才生效。
+	if target != mode || !applied || want != last {
+		switch {
+		case target != "":
+			s.log.Infof("时段切换: %s -> %s", orNone(mode), target)
+			s.applyLock(ctx, cfg, want, target)
+		case applied:
+			s.log.Infof("当前时段无需锁频，解锁所有频段")
+			s.applyLock(ctx, cfg, unlockConfig(), "解锁")
+		}
+		s.mu.Lock()
 		s.currentMode = target
-
-	case target == "" && s.currentMode != "":
-		s.log.Infof("当前时段无需锁频，解锁所有频段")
-		s.applyLock(ctx, unlockConfig(), "解锁")
-		s.currentMode = ""
+		s.lastApplied = want
+		s.applied = true
+		s.lastSwitchAt = time.Now()
+		s.mu.Unlock()
 	}
 
 	if s.hasService(ctx) {
+		s.mu.Lock()
 		s.lastServiceAt = time.Now()
+		s.mu.Unlock()
 		return
 	}
 
+	// 扫频独占模组，期间查不到注册状态；扫完之后模组还要重新驻留。
+	// 这段时间查不到网是正常的，不能算进无服务时长，否则一次全频段扫描
+	// 就足以让超时到点，把用户锁好的频段自动解开。
+	// 注意这个判断必须放在这里而不是只放在 Run 的循环里：本轮检测很可能是在
+	// 扫频开始前就进来了、一直阻塞在命令锁上，扫完才拿到"搜网中"的应答。
+	if s.modemBusyRecently() {
+		s.log.Debugf("刚扫过频，跳过无服务判定")
+		s.mu.Lock()
+		s.lastServiceAt = time.Now()
+		s.mu.Unlock()
+		return
+	}
+
+	s.mu.RLock()
 	down := time.Since(s.lastServiceAt)
-	if down < s.cfg.NoServiceLimit {
+	s.mu.RUnlock()
+	if down < cfg.NoServiceLimit {
 		s.log.Debugf("无服务已持续 %s", down.Truncate(time.Second))
 		return
 	}
 
 	// 锁频锁到了没有覆盖的小区会一直无服务，这时解锁比守着配置更重要。
-	// 这里不重置 currentMode，避免解锁后立刻又锁回去形成来回抖动。
+	// 这里不重置 currentMode / lastApplied，避免解锁后立刻又锁回去形成来回抖动。
 	s.log.Warnf("网络无服务已持续 %s，解锁频段恢复", down.Truncate(time.Second))
-	s.applyLock(ctx, unlockConfig(), "恢复")
+	s.applyLock(ctx, cfg, unlockConfig(), "恢复")
+	s.mu.Lock()
 	s.lastServiceAt = time.Now()
+	s.mu.Unlock()
 }
 
 func orNone(s string) string {
@@ -125,22 +233,22 @@ func orNone(s string) string {
 }
 
 // targetMode 返回当前时刻应该使用的模式，"" 表示不锁频。
-func (s *Scheduler) targetMode(now time.Time) string {
-	night := s.isNight(now)
+func (s *Scheduler) targetMode(cfg ScheduleConfig, now time.Time) string {
+	night := s.isNight(cfg, now)
 	switch {
-	case night && s.cfg.NightEnabled:
+	case night && cfg.NightEnabled:
 		return "夜间"
-	case !night && s.cfg.DayEnabled:
+	case !night && cfg.DayEnabled:
 		return "日间"
 	}
 	return ""
 }
 
-func (s *Scheduler) isNight(now time.Time) bool {
-	start, okStart := parseHHMM(s.cfg.NightStart)
-	end, okEnd := parseHHMM(s.cfg.NightEnd)
+func (s *Scheduler) isNight(cfg ScheduleConfig, now time.Time) bool {
+	start, okStart := parseHHMM(cfg.NightStart)
+	end, okEnd := parseHHMM(cfg.NightEnd)
 	if !okStart || !okEnd {
-		s.log.Warnf("夜间时段配置无法解析: %q-%q", s.cfg.NightStart, s.cfg.NightEnd)
+		s.log.Warnf("夜间时段配置无法解析: %q-%q", cfg.NightStart, cfg.NightEnd)
 		return false
 	}
 
@@ -173,26 +281,41 @@ func unlockConfig() lockPair {
 	return lockPair{LTE: BandLock{Type: 0}, NR: BandLock{Type: 0}}
 }
 
-func (s *Scheduler) lockFor(mode string) lockPair {
+func (s *Scheduler) lockFor(cfg ScheduleConfig, mode string) lockPair {
 	switch mode {
 	case "夜间":
-		return lockPair{LTE: s.cfg.NightLTE, NR: s.cfg.NightNR}
+		return lockPair{LTE: cfg.NightLTE, NR: cfg.NightNR}
 	case "日间":
-		return lockPair{LTE: s.cfg.DayLTE, NR: s.cfg.DayNR}
+		return lockPair{LTE: cfg.DayLTE, NR: cfg.DayNR}
 	}
 	return unlockConfig()
 }
 
 // hasService 通过注册状态判断是否有网络服务。
 func (s *Scheduler) hasService(ctx context.Context) bool {
-	for _, cmd := range []string{"AT+CREG?", "AT+CEREG?"} {
+	// C5GREG 覆盖 SA 组网，CEREG 覆盖 LTE 与 NSA，CREG 兜底。
+	for _, cmd := range []string{"AT+C5GREG?", "AT+CEREG?", "AT+CREG?"} {
 		resp, err := s.client.SendCommand(ctx, cmd)
 		if err != nil {
 			continue
 		}
-		text := resp.Text()
-		// 第二个参数 1=已注册本地网络，5=已注册漫游网络。
-		if strings.Contains(text, ": 0,1") || strings.Contains(text, ": 0,5") {
+		if registered(resp.Text()) {
+			return true
+		}
+	}
+	return false
+}
+
+// regStatusPattern 匹配 +CREG/+CGREG/+CEREG/+C5GREG 的查询应答。
+// 按 3GPP 27.007，查询应答是 "+CxREG: <n>,<stat>[,...]"，其中 <n> 只是 URC
+// 上报模式（0/1/2），真正的注册状态是第二个字段。早期实现直接匹配 ": 0,1"，
+// 在开了 URC 上报（n=1/2）的设备上永远判定为无服务，锁频会在超时后被自动解除。
+var regStatusPattern = regexp.MustCompile(`\+C[A-Z0-9]*REG:\s*\d+\s*,\s*(\d+)`)
+
+// registered 判断注册状态字段是否表示已驻网：1=已注册本地网络，5=已注册漫游网络。
+func registered(text string) bool {
+	for _, m := range regStatusPattern.FindAllStringSubmatch(text, -1) {
+		if m[1] == "1" || m[1] == "5" {
 			return true
 		}
 	}
@@ -200,13 +323,16 @@ func (s *Scheduler) hasService(ctx context.Context) bool {
 }
 
 // applyLock 下发一次完整的锁频切换。
-func (s *Scheduler) applyLock(ctx context.Context, cfg lockPair, mode string) {
+func (s *Scheduler) applyLock(ctx context.Context, sched ScheduleConfig, cfg lockPair, mode string) {
+	s.mu.Lock()
 	s.switchCount++
-	s.log.Infof("开始切换到%s锁频设置 (第 %d 次)", mode, s.switchCount)
+	count := s.switchCount
+	s.mu.Unlock()
+	s.log.Infof("开始切换到%s锁频设置 (第 %d 次)", mode, count)
 
 	var done []string
 
-	if s.cfg.ToggleAirplane {
+	if sched.ToggleAirplane {
 		if resp, err := s.client.SendCommand(ctx, "AT+CFUN=0"); err == nil && resp.OK() {
 			s.log.Infof("已进入飞行模式")
 			if !sleepCtx(ctx, 2*time.Second) {
@@ -235,7 +361,7 @@ func (s *Scheduler) applyLock(ctx context.Context, cfg lockPair, mode string) {
 		}
 	}
 
-	if s.cfg.ToggleAirplane {
+	if sched.ToggleAirplane {
 		if resp, err := s.client.SendCommand(ctx, "AT+CFUN=1"); err == nil && resp.OK() {
 			s.log.Infof("已退出飞行模式")
 			done = append(done, "切飞行模式")
@@ -256,7 +382,7 @@ func (s *Scheduler) applyLock(ctx context.Context, cfg lockPair, mode string) {
 		Kind:   KindSignal,
 		Content: fmt.Sprintf("🔄 定时锁频切换\n时间: %s\n模式: %s\nLTE: %s\nNR: %s\n执行操作: %s\n切换次数: 第 %d 次",
 			time.Now().Format("2006-01-02 15:04:05"), mode,
-			lockSummary("LTE", cfg.LTE), lockSummary("NR", cfg.NR), actions, s.switchCount),
+			lockSummary("LTE", cfg.LTE), lockSummary("NR", cfg.NR), actions, count),
 	})
 	s.log.Infof("定时锁频切换完成: %s", actions)
 }
@@ -286,7 +412,7 @@ func (s *Scheduler) runLockCommand(ctx context.Context, cmd, action string) bool
 // lteCommand 返回要下发的 LTE 锁频命令。ok 为 false 表示这一步不需要做。
 func (s *Scheduler) lteCommand(l BandLock) (cmd, action string, ok bool) {
 	if l.Type <= 0 {
-		if !s.cfg.UnlockLTE {
+		if !s.Config().UnlockLTE {
 			return "", "", false
 		}
 		return "AT^LTEFREQLOCK=0", "LTE解锁", true
@@ -332,7 +458,7 @@ func (s *Scheduler) lteCommand(l BandLock) (cmd, action string, ok bool) {
 // nrCommand 返回要下发的 NR 锁频命令。
 func (s *Scheduler) nrCommand(l BandLock) (cmd, action string, ok bool) {
 	if l.Type <= 0 {
-		if !s.cfg.UnlockNR {
+		if !s.Config().UnlockNR {
 			return "", "", false
 		}
 		return "AT^NRFREQLOCK=0", "NR解锁", true
@@ -401,13 +527,15 @@ func splitList(v string) []string {
 func validatePairs(bands, arfcns []string, table map[int][2]int, kind string, log *Logger) bool {
 	for i := range bands {
 		band, err1 := strconv.Atoi(bands[i])
-		arfcn, err2 := strconv.Atoi(arfcns[i])
+		// ARFCN 按 64 位解析：配置校验允许到 4294967295，
+		// 32 位平台上 Atoi 解不动大于 2^31 的值，会被误判成"不是数字"
+		arfcn, err2 := strconv.ParseInt(arfcns[i], 10, 64)
 		if err1 != nil || err2 != nil {
 			log.Warnf("%s 锁频参数不是数字: 频段 %q 频点 %q", kind, bands[i], arfcns[i])
 			return false
 		}
 		r, known := table[band]
-		if known && (arfcn < r[0] || arfcn > r[1]) {
+		if known && (arfcn < int64(r[0]) || arfcn > int64(r[1])) {
 			log.Warnf("%s 频段 %d 与频点 %d 不匹配(应在 %d-%d)", kind, band, arfcn, r[0], r[1])
 			return false
 		}
@@ -415,16 +543,22 @@ func validatePairs(bands, arfcns []string, table map[int][2]int, kind string, lo
 	return true
 }
 
-// autoDetectSCS 在未显式配置时按频段推断子载波间隔类型。
+// autoDetectSCS 在未显式配置时按频段推断 SSB 的子载波间隔类型。
+// 取值含义见 AT 手册 13.13.3：0=15kHz 1=30kHz 3=120kHz。
 func autoDetectSCS(bands []string) []string {
 	out := make([]string, 0, len(bands))
 	for _, b := range bands {
 		band, err := strconv.Atoi(b)
-		if err == nil && nr15kHzBands[band] {
+		switch {
+		case err != nil:
+			out = append(out, "1")
+		case nrMmWaveBands[band]:
+			out = append(out, "3")
+		case nr30kHzBands[band]:
+			out = append(out, "1")
+		default:
 			out = append(out, "0")
-			continue
 		}
-		out = append(out, "1")
 	}
 	return out
 }

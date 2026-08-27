@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"sync/atomic"
 	"time"
 )
@@ -47,3 +48,12 @@ func (l *Logger) Debugf(format string, args ...any) { l.logf(LevelDebug, "DEBUG"
 func (l *Logger) Infof(format string, args ...any)  { l.logf(LevelInfo, "INFO", format, args...) }
 func (l *Logger) Warnf(format string, args ...any)  { l.logf(LevelWarn, "WARN", format, args...) }
 func (l *Logger) Errorf(format string, args ...any) { l.logf(LevelError, "ERROR", format, args...) }
+
+// guard 拦住后台 goroutine 里的 panic。这个服务常驻在路由器上，
+// 一条畸形的模组上报把整个进程带走，比这条上报处理失败严重得多。
+// 用法：defer guard(log, "定时锁频")
+func guard(log *Logger, name string) {
+	if r := recover(); r != nil {
+		log.Errorf("%s 出现内部错误，已拦截避免服务退出: %v\n%s", name, r, debug.Stack())
+	}
+}
