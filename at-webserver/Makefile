@@ -2,12 +2,14 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=at-webserver
 PKG_VERSION:=2.1
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_LICENSE:=MIT
 PKG_BUILD_DEPENDS:=golang/host
 PKG_BUILD_PARALLEL:=1
 # Go 生成的代码不能用 MIPS16 指令集。
+# 24.10 起用 PKG_BUILD_FLAGS 控制，老变量 PKG_USE_MIPS16 留着兼容旧 SDK。
+PKG_BUILD_FLAGS:=no-mips16
 PKG_USE_MIPS16:=0
 
 GO_PKG:=github.com/inotdream/mt5700webui-openwrt-server/at-webserver
