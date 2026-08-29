@@ -2,12 +2,14 @@ import React, { useState } from 'react';
 import { Banner, Button, Input, Modal, Progress, Steps, Toast, Typography } from '@douyinfe/semi-ui';
 import { ATService } from '@/services/at';
 import { useATReady } from '@/hooks/useATReady';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { extractATData } from '@/modem/parse';
 import { PageCard, Panel, RefreshBtn } from '@/ui/widgets';
 
 const at = () => ATService.getInstance();
 
 const SystemUpgrade: React.FC = () => {
+  const isNarrow = useMediaQuery('(max-width: 520px)');
   const [agreed, setAgreed] = useState(false);
   const [showAgree, setShowAgree] = useState(true);
   const [version, setVersion] = useState('');
@@ -178,7 +180,13 @@ const SystemUpgrade: React.FC = () => {
             </Panel>
 
             <Panel title="升级步骤">
-              <Steps current={step} type="basic" size="small">
+              <Steps
+                className="upgrade-steps"
+                current={step}
+                type="basic"
+                size="small"
+                direction={isNarrow ? 'vertical' : 'horizontal'}
+              >
                 <Steps.Step title="准备" description="设置升级参数" />
                 <Steps.Step title="初始化" description="初始化 FOTA" />
                 <Steps.Step title="下载" description="下载固件" />

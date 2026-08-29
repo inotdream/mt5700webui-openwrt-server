@@ -1367,8 +1367,6 @@ const SystemInfo: React.FC = () => {
                 checked={therm.enabled}
                 onChange={handleSetThermEnabled}
                 loading={thermLoading}
-                checkedText="已开启"
-                uncheckedText="已关闭"
               />
             </Panel>
             <Panel title="温度检测间隔">

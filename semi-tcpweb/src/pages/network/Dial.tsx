@@ -22,7 +22,7 @@ const at = () => ATService.getInstance();
 
 type DialSettings = {
   enable: number;
-  dialMode: number;
+  dialMode?: number;
   protocol: string;
   apn: string;
   username: string;
@@ -80,10 +80,37 @@ const PDP_TYPE_OPTIONS = [
   { label: 'IPv4/IPv6', value: 'IPV4V6' },
 ];
 
-const getDialModeText = (mode: number) => {
+const getDialModeText = (mode?: number) => {
   const map: Record<number, string> = { 1: 'USB网络接口', 2: '转网口模式' };
-  return map[mode] || '未知';
+  return mode == null ? '未识别' : map[mode] || '未知';
 };
+
+const parseAutoDialResponse = (raw: string): Partial<DialSettings> | null => {
+  const line = raw
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((item) => item.trim())
+    .find((item) => item.startsWith('^SETAUTODIAL:'));
+  if (!line) return null;
+
+  const payload = line.slice(line.indexOf(':') + 1).trim();
+  const fields = payload.match(/(?:[^,"]+|"[^"]*")+/g)?.map((field) =>
+    field.trim().replace(/^"|"$/g, ''),
+  );
+  if (!fields?.length || !/^\d+$/.test(fields[0])) return null;
+
+  const parsed: Partial<DialSettings> = { enable: Number(fields[0]) };
+  if (fields.length >= 2 && /^\d+$/.test(fields[1])) parsed.dialMode = Number(fields[1]);
+  if (fields.length >= 3) parsed.protocol = fields[2] || '';
+  if (fields.length >= 4) parsed.apn = fields[3] || '';
+  if (fields.length >= 5) parsed.username = fields[4] || '';
+  if (fields.length >= 6) parsed.password = fields[5] || '';
+  if (fields.length >= 7 && /^\d+$/.test(fields[6])) parsed.authType = Number(fields[6]);
+  return parsed;
+};
+
+const ndisIsActive = (raw: string) =>
+  /\^NDISSTATQRY:\s*1\s*,/i.test(raw.replace(/\r/g, ''));
 
 const getUSBModeText = (mode: number) => {
   const map: Record<number, string> = {
@@ -140,13 +167,12 @@ const NetworkDial: React.FC = () => {
     apn: false,
     usb: true,
     infcfg: true,
-    dmz: true,
+    dmz: false,
     pdp: true,
   });
 
   const [settings, setSettings] = useState<DialSettings>({
     enable: 0,
-    dialMode: 2,
     protocol: '',
     apn: '',
     username: '',
@@ -246,35 +272,24 @@ const NetworkDial: React.FC = () => {
     try {
       const res = await sendCmd('AT^SETAUTODIAL?');
       if (res.success && res.data) {
-        const match = String(res.data)
-          .trim()
-          .match(/\^SETAUTODIAL:(\d+),(\d+),"([^"]*)",?"?([^",]*)"?,?"?([^",]*)"?,?"?([^",]*)"?,(\d+)/);
-        if (match) {
-          const [, enable, dialMode, protocol, apn, username, password, authType] = match;
-          const s = {
-            enable: parseInt(enable, 10),
-            dialMode: parseInt(dialMode, 10),
-            protocol: protocol || '',
-            apn: apn || '',
-            username: username || '',
-            password: password || '',
-            authType: parseInt(authType, 10),
-          };
-          setSettings((prev) => ({ ...prev, ...s }));
-          setApnForm({ apn: s.apn, username: s.username, password: s.password, authType: s.authType });
-        } else {
-          setSettings((prev) => ({
-            ...prev,
-            enable: 0,
-            dialMode: 2,
-            protocol: '',
-            apn: '',
-            username: '',
-            password: '',
-            authType: 0,
-          }));
-          setApnForm({ apn: '', username: '', password: '', authType: 0 });
+        const parsed = parseAutoDialResponse(String(res.data));
+        if (!parsed) throw new Error('无法解析自动拨号状态');
+
+        // MT5700 在关闭模组内置自动拨号时只返回 ^SETAUTODIAL:0，
+        // 不包含数据接口字段。此时用正在工作的 NDIS 会话判断 USB 数据口，
+        // 避免把 OpenWrt/QModem 的 USB 拨号错误显示成“转网口模式”。
+        if (parsed.dialMode == null) {
+          const ndis = await sendCmd('AT^NDISSTATQRY?');
+          if (ndis.success && ndis.data && ndisIsActive(String(ndis.data))) parsed.dialMode = 1;
         }
+
+        setSettings((prev) => ({ ...prev, ...parsed }));
+        setApnForm((prev) => ({
+          apn: parsed.apn ?? prev.apn,
+          username: parsed.username ?? prev.username,
+          password: parsed.password ?? prev.password,
+          authType: parsed.authType ?? prev.authType,
+        }));
       }
     } catch {
       Toast.error('获取拨号配置失败');
@@ -286,7 +301,7 @@ const NetworkDial: React.FC = () => {
   const handleAutoDialChange = async (checked: boolean) => {
     setLoading((l) => ({ ...l, dial: true }));
     try {
-      const cmd = checked ? `AT^SETAUTODIAL=1,${settings.dialMode || 2}` : 'AT^SETAUTODIAL=0';
+      const cmd = checked ? `AT^SETAUTODIAL=1,${settings.dialMode || 1}` : 'AT^SETAUTODIAL=0';
       const res = await sendCmd(cmd);
       if (res.success) {
         Toast.success(checked ? '已开启自动拨号' : '已关闭自动拨号');

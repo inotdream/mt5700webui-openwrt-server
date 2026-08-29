@@ -2101,6 +2101,13 @@ textarea[readonly],
 }
 
 @media (max-width: 520px) {
+  .upgrade-steps.semi-steps-vertical .semi-steps-item-title .semi-steps-item-title-text,
+  .upgrade-steps.semi-steps-vertical .semi-steps-item-description {
+    overflow: visible;
+    white-space: normal;
+    text-overflow: clip;
+  }
+
   .app-header-right {
     gap: 4px;
   }
