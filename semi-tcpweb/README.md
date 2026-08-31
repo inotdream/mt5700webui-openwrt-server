@@ -1,6 +1,6 @@
 # semi-tcpweb
 
-MT5700M-CN 5G 模组 Web 管理界面的 Semi Design 重构版，当前版本 V3.0.0，功能参考 `tcpweb-manager`。
+MT5700M-CN 5G 模组 Web 管理界面的 Semi Design 重构版，当前版本 V3.0.2，功能参考 `tcpweb-manager`。
 
 ## 技术栈
 

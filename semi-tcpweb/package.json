@@ -1,7 +1,7 @@
 {
   "name": "semi-tcpweb",
   "private": true,
-  "version": "3.0.0",
+  "version": "3.0.2",
   "type": "module",
   "description": "MT5700M-CN Web UI — Semi Design rewrite of tcpweb-manager",
   "scripts": {

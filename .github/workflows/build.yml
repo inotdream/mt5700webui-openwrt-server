@@ -28,6 +28,12 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm run build
+      - name: 校验插件内 WebUI 与最新源码一致
+        run: |
+          before=$(find ../at-webserver/files/www/5700 -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)
+          npm run sync:www
+          after=$(find ../at-webserver/files/www/5700 -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)
+          test "$before" = "$after"
 
   backend:
     name: Go 后端 vet 与单测
