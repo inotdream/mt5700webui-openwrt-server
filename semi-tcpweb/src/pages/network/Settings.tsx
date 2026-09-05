@@ -13,6 +13,7 @@ import {
 import { ATService, type ATResponse, type URCData } from '@/services/at';
 import { useATReady } from '@/hooks/useATReady';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
+import { arfcnToFrequencyMhz } from '@/modem/cellscan';
 import { getBandFromArfcn, getDefaultScsType } from '@/modem/parse';
 import {
   buildLockCommand,
@@ -30,7 +31,22 @@ import { ScanPanel } from './ScanPanel';
 
 const at = () => ATService.getInstance();
 
-type Neighbor = { type: string; arfcn: string; pci: number; rsrp: string | number; rsrq?: string | number; sinr?: string | number; rxlev?: string; band?: number };
+type Neighbor = {
+  type: string;
+  arfcn: string;
+  frequencyMhz?: number | null;
+  pci: number;
+  rsrp: string | number;
+  rsrq?: string | number;
+  sinr?: string | number;
+  rxlev?: string;
+  band?: number;
+};
+
+const neighborChannelText = (cell: Neighbor): string => {
+  if (!cell.arfcn) return '—';
+  return cell.frequencyMhz == null ? cell.arfcn : `${cell.arfcn}（${cell.frequencyMhz.toFixed(3)} MHz）`;
+};
 
 const emptyItem = emptyLockItem;
 
@@ -60,7 +76,11 @@ const NetworkSettings: React.FC = () => {
         render: (value: number | undefined, record: Neighbor) =>
           value ? (record.type === 'NR' ? `n${value}` : `B${value}`) : '—',
       },
-      { title: 'ARFCN', dataIndex: 'arfcn' },
+      {
+        title: 'ARFCN（频率）',
+        dataIndex: 'arfcn',
+        render: (_value: string, record: Neighbor) => neighborChannelText(record),
+      },
       { title: 'PCI', dataIndex: 'pci' },
       { title: 'RSRP', dataIndex: 'rsrp' },
       {
@@ -233,17 +253,22 @@ const NetworkSettings: React.FC = () => {
             const values = (matched[2] || '').split(',').map((v) => v.trim().replace(/"/g, ''));
             if (type === 'LTE') {
               const arfcn = values[0];
+              const arfcnNumber = parseInt(arfcn, 10);
+              const band = getBandFromArfcn('LTE', arfcnNumber);
               cells.push({
                 type,
                 arfcn,
+                frequencyMhz: arfcnToFrequencyMhz('LTE', arfcnNumber, band),
                 pci: parseInt(values[1], 16),
                 rsrp: values[2],
                 rsrq: values[3],
                 rxlev: values[4],
-                band: getBandFromArfcn('LTE', parseInt(arfcn, 10)),
+                band,
               });
             } else if (type === 'NR') {
               const arfcn = values[0];
+              const arfcnNumber = parseInt(arfcn, 10);
+              const band = getBandFromArfcn('NR', arfcnNumber);
               // 有的固件按 1/8 dB 上报。阈值取各指标的合法量程边界（手册 13.27.3：
               // RSRP -156~-31、RSRQ -43~20、SINR -23~40），超出即视为 8 倍值还原。
               const scale = (raw: string, big: number) => {
@@ -253,11 +278,12 @@ const NetworkSettings: React.FC = () => {
               cells.push({
                 type,
                 arfcn,
+                frequencyMhz: arfcnToFrequencyMhz('NR', arfcnNumber, band),
                 pci: parseInt(values[1], 16),
                 rsrp: scale(values[2], 157),
                 rsrq: scale(values[3], 43.5),
                 sinr: scale(values[4], 40),
-                band: getBandFromArfcn('NR', parseInt(arfcn, 10)),
+                band,
               });
             }
           });
@@ -501,7 +527,7 @@ const NetworkSettings: React.FC = () => {
                         </Tag>
                         <b>
                           {cell.band ? (cell.type === 'NR' ? `n${cell.band}` : `B${cell.band}`) : '—'}
-                          {` · ${cell.arfcn}`}
+                          {` · ${neighborChannelText(cell)}`}
                         </b>
                         <span>PCI {cell.pci}</span>
                       </div>

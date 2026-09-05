@@ -15,8 +15,12 @@ export interface ScanCell {
   rat: ScanRat;
   ratName: string;
   plmn: string;
-  /** LTE/NR 下为频点（可直接用于锁频），GSM/WCDMA 下为该制式的频点 */
+  /** 模组在 ^CELLSCAN 第三个字段里上报的原始值，不同固件可能是频率或 ARFCN。 */
   freq: number | null;
+  /** 归一化后的 LTE EARFCN / NR-ARFCN，可直接用于锁频。 */
+  arfcn: number | null;
+  /** 根据原始频率或 ARFCN 换算出的中心频率，单位 MHz。 */
+  frequencyMhz: number | null;
   pci: number | null;
   /** 频段号，已从手册的十六进制换算成十进制；解析不出来时为 null */
   band: number | null;
@@ -70,6 +74,94 @@ const parseBand = (v: string): number | null => {
   return n;
 };
 
+interface NormalizedFrequency {
+  arfcn: number | null;
+  frequencyMhz: number | null;
+}
+
+// 3GPP TS 38.104 的全局 NR-ARFCN 栅格。常用频段范围用于区分模组上报的是
+// ARFCN 还是 kHz；例如 n78 的 3408960 kHz 会被换算成 NR-ARFCN 627264。
+const NR_ARFCN_RANGES: Record<number, [number, number]> = {
+  1: [422000, 434000],
+  3: [361000, 376000],
+  5: [173800, 178800],
+  8: [185000, 192000],
+  28: [151600, 160600],
+  41: [499200, 537999],
+  77: [620000, 680000],
+  78: [620000, 653333],
+  79: [693334, 733333],
+};
+
+const nrFrequencyKhzFromArfcn = (arfcn: number): number => {
+  if (arfcn < 600000) return arfcn * 5;
+  if (arfcn < 2016667) return 3000000 + (arfcn - 600000) * 15;
+  return 24250080 + (arfcn - 2016667) * 60;
+};
+
+const nrArfcnFromFrequencyKhz = (frequencyKhz: number): number => {
+  if (frequencyKhz < 3000000) return Math.round(frequencyKhz / 5);
+  if (frequencyKhz < 24250080) return 600000 + Math.round((frequencyKhz - 3000000) / 15);
+  return 2016667 + Math.round((frequencyKhz - 24250080) / 60);
+};
+
+const normalizeNrFrequency = (raw: number, band: number | null): NormalizedFrequency => {
+  const range = band == null ? undefined : NR_ARFCN_RANGES[band];
+  const rawIsArfcn = !!range && raw >= range[0] && raw <= range[1];
+  const arfcn = rawIsArfcn ? raw : nrArfcnFromFrequencyKhz(raw);
+  return { arfcn, frequencyMhz: nrFrequencyKhzFromArfcn(arfcn) / 1000 };
+};
+
+interface LteBandRaster {
+  low100Khz: number;
+  offset: number;
+  min: number;
+  max: number;
+}
+
+// 扫频和邻区页面目前支持的 LTE 频段；这里使用下行 EARFCN 栅格。
+const LTE_BAND_RASTERS: Record<number, LteBandRaster> = {
+  1: { low100Khz: 21100, offset: 0, min: 0, max: 599 },
+  3: { low100Khz: 18050, offset: 1200, min: 1200, max: 1949 },
+  5: { low100Khz: 8690, offset: 2400, min: 2400, max: 2649 },
+  8: { low100Khz: 9250, offset: 3450, min: 3450, max: 3799 },
+  34: { low100Khz: 20100, offset: 36200, min: 36200, max: 36349 },
+  38: { low100Khz: 25700, offset: 37750, min: 37750, max: 38249 },
+  39: { low100Khz: 18800, offset: 38250, min: 38250, max: 38649 },
+  40: { low100Khz: 23000, offset: 38650, min: 38650, max: 39649 },
+  41: { low100Khz: 24960, offset: 39650, min: 39650, max: 41589 },
+};
+
+/** 把锁频/邻区接口使用的 ARFCN 转为便于阅读的中心频率。 */
+export const arfcnToFrequencyMhz = (
+  type: 'LTE' | 'NR',
+  arfcn: number,
+  band?: number | null,
+): number | null => {
+  if (!Number.isFinite(arfcn)) return null;
+  if (type === 'NR') return nrFrequencyKhzFromArfcn(arfcn) / 1000;
+  const raster = band == null ? undefined : LTE_BAND_RASTERS[band];
+  if (!raster || arfcn < raster.min || arfcn > raster.max) return null;
+  return (raster.low100Khz + arfcn - raster.offset) / 10;
+};
+
+const normalizeLteFrequency = (raw: number, band: number | null): NormalizedFrequency => {
+  const raster = band == null ? undefined : LTE_BAND_RASTERS[band];
+  if (!raster) return { arfcn: raw, frequencyMhz: null };
+
+  const rawIsArfcn = raw >= raster.min && raw <= raster.max;
+  const arfcn = rawIsArfcn ? raw : raster.offset + Math.round(raw / 100 - raster.low100Khz);
+  if (arfcn < raster.min || arfcn > raster.max) return { arfcn: raw, frequencyMhz: null };
+  return { arfcn, frequencyMhz: arfcnToFrequencyMhz('LTE', arfcn, band) };
+};
+
+const normalizeFrequency = (rat: number, raw: number | null, band: number | null): NormalizedFrequency => {
+  if (raw == null) return { arfcn: null, frequencyMhz: null };
+  if (rat === 3) return normalizeNrFrequency(raw, band);
+  if (rat === 2) return normalizeLteFrequency(raw, band);
+  return { arfcn: raw, frequencyMhz: null };
+};
+
 /** 解析一行 ^CELLSCAN 应答，不是扫频结果则返回 null。 */
 export const parseScanLine = (line: string): ScanCell | null => {
   const idx = line.indexOf('^CELLSCAN:');
@@ -85,13 +177,19 @@ export const parseScanLine = (line: string): ScanCell | null => {
   const rat = dec(f[0]);
   if (rat === null || !(rat in RAT_NAMES)) return null;
 
+  const rawFreq = dec(f[2]);
+  const band = parseBand(f[4]);
+  const normalized = normalizeFrequency(rat, rawFreq, band);
+
   return {
     rat: rat as ScanRat,
     ratName: RAT_NAMES[rat],
     plmn: f[1].replace(/"/g, ''),
-    freq: dec(f[2]),
+    freq: rawFreq,
+    arfcn: normalized.arfcn,
+    frequencyMhz: normalized.frequencyMhz,
     pci: dec(f[3]),
-    band: parseBand(f[4]),
+    band,
     lac: f[5].trim(),
     cid: f[6].trim(),
     rxlev: dec(f[7]),

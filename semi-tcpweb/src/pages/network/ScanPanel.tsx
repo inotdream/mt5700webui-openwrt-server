@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Input, Progress, Select, Space, Table, Tag, Toast, Typography } from '@douyinfe/semi-ui';
+import { Button, Input, Modal, Progress, Select, Space, Table, Tag, Toast, Typography } from '@douyinfe/semi-ui';
 import { ATService, type ATResponse } from '@/services/at';
 import { useATReady } from '@/hooks/useATReady';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
@@ -18,6 +18,47 @@ import { LTE_BANDS, NR_BANDS, SCS_TYPES } from '@/modem/lock';
 import { Field, PageCard, TwoCol } from '@/ui/widgets';
 
 const at = () => ATService.getInstance();
+const SCAN_WARNING_KEY = 'cellscanDisconnectWarningAcknowledged';
+
+const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
+interface ScanDialSnapshot {
+  autoDialEnabled: boolean;
+  dialMode: number;
+  ndisActive: boolean;
+}
+
+interface ScanDeniedDiagnostics {
+  autoDialEnabled?: boolean;
+  ndisActive?: boolean;
+  functionLevel?: number;
+}
+
+const isOperationNotAllowed = (message: string): boolean =>
+  /\+CME ERROR:\s*operation not allowed/i.test(message);
+
+const queryText = async (command: string): Promise<string> => {
+  try {
+    const response = await at().sendCommand(command);
+    return response.success ? String(response.data || '') : '';
+  } catch {
+    return '';
+  }
+};
+
+const diagnoseScanDenied = async (): Promise<ScanDeniedDiagnostics> => {
+  // AT 通道是串行的，诊断命令也按顺序发，避免互相抢应答。
+  const autoDial = await queryText('AT^SETAUTODIAL?');
+  const ndis = await queryText('AT^NDISSTATQRY?');
+  const cfun = await queryText('AT+CFUN?');
+  const autoDialMatch = autoDial.match(/\^SETAUTODIAL:\s*(\d+)/i);
+  const cfunMatch = cfun.match(/\+CFUN:\s*(\d+)/i);
+  return {
+    autoDialEnabled: autoDialMatch ? autoDialMatch[1] === '1' : undefined,
+    ndisActive: ndis ? /\^NDISSTATQRY:\s*1\s*,/i.test(ndis) : undefined,
+    functionLevel: cfunMatch ? Number(cfunMatch[1]) : undefined,
+  };
+};
 
 export interface ScanLockTarget {
   type: 'LTE' | 'NR';
@@ -49,6 +90,13 @@ const signalText = (cell: ScanCell): string => {
   return '—';
 };
 
+const channelText = (cell: ScanCell): string => {
+  if (cell.arfcn == null) return '—';
+  return cell.frequencyMhz == null
+    ? String(cell.arfcn)
+    : `${cell.arfcn}（${cell.frequencyMhz.toFixed(3)} MHz）`;
+};
+
 export const ScanPanel: React.FC<Props> = ({ onLock, onScanningChange, disabled }) => {
   const [filter, setFilter] = useState<ScanFilter>({ rat: '' });
   const isNarrow = useMediaQuery('(max-width: 640px)');
@@ -61,6 +109,112 @@ export const ScanPanel: React.FC<Props> = ({ onLock, onScanningChange, disabled 
   onLockRef.current = onLock;
   // 只有本页面发起过的扫频才需要在离开时收掉。
   const startedRef = useRef(false);
+  const preparingDialRef = useRef(false);
+  const scanAcceptedRef = useRef(false);
+  const diagnosingDeniedRef = useRef(false);
+  const dialSnapshotRef = useRef<ScanDialSnapshot | null>(null);
+  const restorePromiseRef = useRef<Promise<void> | null>(null);
+  const restoreDialRef = useRef<() => Promise<void>>(async () => {});
+
+  const restoreDial = async () => {
+    if (restorePromiseRef.current) return restorePromiseRef.current;
+    const snapshot = dialSnapshotRef.current;
+    if (!snapshot) return;
+
+    const restoring = (async () => {
+      try {
+        // 原先开启自动拨号时恢复其配置即可，它会自行重建数据会话；原先仅有手动
+        // NDIS 会话时才显式重新拨号，避免对同一个 CID 重复发起连接。
+        const command = snapshot.autoDialEnabled
+          ? `AT^SETAUTODIAL=1,${snapshot.dialMode}`
+          : snapshot.ndisActive
+            ? 'AT^NDISDUP=1,1'
+            : '';
+        if (command) {
+          const response = await at().sendCommand(command);
+          if (!response.success) throw new Error(('error' in response && response.error) || '恢复拨号失败');
+          await sleep(1500);
+        }
+      } catch (error) {
+        Toast.warning(`扫描已结束，但${error instanceof Error ? error.message : '恢复拨号失败'}，请到拨号页面手动恢复`);
+      } finally {
+        dialSnapshotRef.current = null;
+        restorePromiseRef.current = null;
+      }
+    })();
+
+    restorePromiseRef.current = restoring;
+    return restoring;
+  };
+  restoreDialRef.current = restoreDial;
+
+  const prepareDialForScan = async () => {
+    preparingDialRef.current = true;
+    try {
+      const autoDialRaw = await queryText('AT^SETAUTODIAL?');
+      const autoDialMatch = autoDialRaw.match(/\^SETAUTODIAL:\s*(\d+)(?:\s*,\s*(\d+))?/i);
+      const ndisRaw = await queryText('AT^NDISSTATQRY?');
+      const snapshot: ScanDialSnapshot = {
+        autoDialEnabled: autoDialMatch?.[1] === '1',
+        dialMode: autoDialMatch?.[2] ? Number(autoDialMatch[2]) : 1,
+        ndisActive: /\^NDISSTATQRY:\s*1\s*,/i.test(ndisRaw),
+      };
+      dialSnapshotRef.current = snapshot;
+
+      if (snapshot.autoDialEnabled) {
+        setNote('正在临时关闭自动拨号');
+        const response = await at().sendCommand('AT^SETAUTODIAL=0');
+        if (!response.success) throw new Error(('error' in response && response.error) || '关闭自动拨号失败');
+        await sleep(800);
+      }
+      const currentNdisRaw = snapshot.ndisActive ? await queryText('AT^NDISSTATQRY?') : '';
+      const ndisStillActive = currentNdisRaw
+        ? /\^NDISSTATQRY:\s*1\s*,/i.test(currentNdisRaw)
+        : snapshot.ndisActive;
+      if (ndisStillActive) {
+        setNote('正在释放数据拨号，网络可能暂时中断');
+        const response = await at().sendCommand('AT^NDISDUP=1,0');
+        if (!response.success) throw new Error(('error' in response && response.error) || '关闭数据拨号失败');
+        await sleep(1500);
+        const verify = await queryText('AT^NDISSTATQRY?');
+        if (verify && /\^NDISSTATQRY:\s*1\s*,/i.test(verify)) {
+          await sleep(1500);
+        }
+      }
+    } finally {
+      preparingDialRef.current = false;
+    }
+  };
+
+  const showOperationNotAllowed = async (error: string) => {
+    if (diagnosingDeniedRef.current) return;
+    diagnosingDeniedRef.current = true;
+    try {
+      const diagnostics = await diagnoseScanDenied();
+      const reasons: string[] = [];
+      if (diagnostics.autoDialEnabled) reasons.push('自动拨号仍处于开启状态');
+      if (diagnostics.ndisActive) reasons.push('数据拨号仍未完全释放');
+      if (diagnostics.functionLevel != null && diagnostics.functionLevel !== 1) {
+        reasons.push(`模组功能级别为 CFUN=${diagnostics.functionLevel}`);
+      }
+      Modal.error({
+        title: '模组不允许开始扫频',
+        content: (
+          <div>
+            <p>{error}</p>
+            <p>
+              {reasons.length
+                ? `检测到：${reasons.join('；')}。请等待业务释放后重试。`
+                : '拨号已尝试临时关闭，但模组仍拒绝命令。请结束通话、短信或其它占用射频/AT 通道的业务，稍等后重试。'}
+            </p>
+          </div>
+        ),
+        okText: '知道了',
+      });
+    } finally {
+      diagnosingDeniedRef.current = false;
+    }
+  };
 
   useEffect(() => {
     const handle = (response: ATResponse) => {
@@ -68,6 +222,7 @@ export const ScanPanel: React.FC<Props> = ({ onLock, onScanningChange, disabled 
       const push = response.data as ScanPush;
 
       if (push.state === 'running') {
+        scanAcceptedRef.current = true;
         const cell = push.cell ? parseScanLine(push.cell) : null;
         if (cell) setCells((prev) => [...prev, cell]);
         return;
@@ -75,17 +230,24 @@ export const ScanPanel: React.FC<Props> = ({ onLock, onScanningChange, disabled 
 
       setScanning(false);
       startedRef.current = false;
+      scanAcceptedRef.current = false;
       onScanningChangeRef.current?.(false);
       // 结束推送带的是完整结果，用它覆盖，免得中途丢包导致列表和 count 对不上。
       if (push.lines) setCells(parseScanLines(push.lines));
 
       if (push.state === 'error') {
         setNote('');
-        Toast.error(`扫频失败：${push.error || '未知错误'}`);
+        const error = push.error || '未知错误';
+        void (async () => {
+          if (isOperationNotAllowed(error)) await showOperationNotAllowed(error);
+          else Toast.error(`扫频失败：${error}`);
+          await restoreDialRef.current();
+        })();
         return;
       }
       // 手册：打断完成后按扫描完成处理，已扫到的结果依然有效。
       setNote(push.state === 'aborted' ? `已取消，保留已扫到的 ${push.count} 个小区` : `扫描完成，共 ${push.count} 个小区`);
+      void restoreDialRef.current();
     };
 
     at().subscribe(handle);
@@ -99,6 +261,7 @@ export const ScanPanel: React.FC<Props> = ({ onLock, onScanningChange, disabled 
       const res = await at().sendCommand(SCAN_STATE_COMMAND);
       if (res.success && isScanRunning(String(res.data || ''))) {
         setScanning(true);
+        scanAcceptedRef.current = true;
         onScanningChangeRef.current?.(true);
         setNote('检测到后台仍在扫描，可取消或等待结果');
       }
@@ -110,12 +273,15 @@ export const ScanPanel: React.FC<Props> = ({ onLock, onScanningChange, disabled 
   useEffect(() => {
     if (!scanning) return undefined;
     const timer = window.setInterval(async () => {
+      if (preparingDialRef.current) return;
       const res = await at().sendCommand(SCAN_STATE_COMMAND);
       if (res.success && !isScanRunning(String(res.data || ''))) {
         setScanning(false);
         startedRef.current = false;
+        scanAcceptedRef.current = false;
         onScanningChangeRef.current?.(false);
         setNote('扫描已结束');
+        void restoreDialRef.current();
       }
     }, 5000);
     return () => window.clearInterval(timer);
@@ -124,33 +290,71 @@ export const ScanPanel: React.FC<Props> = ({ onLock, onScanningChange, disabled 
   // 离开页面时结果已经没人看了，留着扫频只会一直占着模组，主动收掉。
   useEffect(
     () => () => {
-      if (startedRef.current) void at().sendCommand(SCAN_ABORT_COMMAND);
+      void (async () => {
+        if (startedRef.current) await at().sendCommand(SCAN_ABORT_COMMAND);
+        await restoreDialRef.current();
+      })();
     },
     [],
   );
 
-  const start = async () => {
+  const beginScan = async (command: string) => {
+    setCells([]);
+    setNote('');
+    setScanning(true);
+    scanAcceptedRef.current = false;
+    onScanningChangeRef.current?.(true);
+    try {
+      await prepareDialForScan();
+      startedRef.current = true;
+      const res = await at().sendCommand(command);
+      if (!res.success) throw new Error(('error' in res && res.error) || '模组拒绝了扫频命令');
+      scanAcceptedRef.current = true;
+      setNote('扫描中，全频段扫描可能需要几分钟');
+    } catch (err) {
+      setScanning(false);
+      startedRef.current = false;
+      scanAcceptedRef.current = false;
+      onScanningChangeRef.current?.(false);
+      const message = err instanceof Error ? err.message : '启动扫频失败';
+      if (isOperationNotAllowed(message)) await showOperationNotAllowed(message);
+      else Toast.error(message);
+      await restoreDial();
+    }
+  };
+
+  const start = () => {
     const { command, error } = buildScanCommand(filter);
     if (error) {
       Toast.error(error);
       return;
     }
 
-    setCells([]);
-    setNote('');
-    setScanning(true);
-    startedRef.current = true;
-    onScanningChangeRef.current?.(true);
+    let acknowledged = false;
     try {
-      const res = await at().sendCommand(command);
-      if (!res.success) throw new Error(('error' in res && res.error) || '模组拒绝了扫频命令');
-      setNote('扫描中，全频段扫描可能需要几分钟');
-    } catch (err) {
-      setScanning(false);
-      startedRef.current = false;
-      onScanningChangeRef.current?.(false);
-      Toast.error(err instanceof Error ? err.message : '启动扫频失败');
+      acknowledged = window.localStorage.getItem(SCAN_WARNING_KEY) === '1';
+    } catch {
+      // 禁用本地存储时退化为每次提示，不影响扫频本身。
     }
+    if (acknowledged) {
+      void beginScan(command);
+      return;
+    }
+
+    Modal.confirm({
+      title: '扫频期间网络可能中断',
+      content: '开始前会临时关闭当前数据拨号，扫频完成或取消后自动恢复。通过网络 AT 连接时，页面也可能短暂掉线并自动重连。此提示在当前浏览器只显示一次。',
+      okText: '继续扫描',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          window.localStorage.setItem(SCAN_WARNING_KEY, '1');
+        } catch {
+          // 本地存储不可用不应阻止用户继续。
+        }
+        await beginScan(command);
+      },
+    });
   };
 
   const cancel = async () => {
@@ -166,7 +370,7 @@ export const ScanPanel: React.FC<Props> = ({ onLock, onScanningChange, disabled 
   };
 
   const lockable = (cell: ScanCell): boolean =>
-    (cell.ratName === 'LTE' || cell.ratName === 'NR') && cell.band != null && cell.freq != null && cell.pci != null;
+    (cell.ratName === 'LTE' || cell.ratName === 'NR') && cell.band != null && cell.arfcn != null && cell.pci != null;
 
   const columns = useMemo(
     () => [
@@ -182,7 +386,11 @@ export const ScanPanel: React.FC<Props> = ({ onLock, onScanningChange, disabled 
         render: (value: number | null, record: ScanCell) =>
           value == null ? '—' : record.ratName === 'NR' ? `n${value}` : `B${value}`,
       },
-      { title: '频点', dataIndex: 'freq', render: (value: number | null) => value ?? '—' },
+      {
+        title: 'ARFCN（频率）',
+        dataIndex: 'arfcn',
+        render: (_value: number | null, record: ScanCell) => channelText(record),
+      },
       { title: 'PCI', dataIndex: 'pci', render: (value: number | null) => value ?? '—' },
       {
         title: '信号',
@@ -203,7 +411,7 @@ export const ScanPanel: React.FC<Props> = ({ onLock, onScanningChange, disabled 
               onLockRef.current({
                 type: record.ratName as 'LTE' | 'NR',
                 band: record.band as number,
-                arfcn: String(record.freq),
+                arfcn: String(record.arfcn),
                 pci: String(record.pci),
                 scs: record.scs ?? undefined,
               })
@@ -218,7 +426,7 @@ export const ScanPanel: React.FC<Props> = ({ onLock, onScanningChange, disabled 
   );
 
   const data = useMemo(
-    () => cells.map((cell, index) => ({ ...cell, key: `${cell.ratName}-${cell.freq}-${cell.pci}-${index}` })),
+    () => cells.map((cell, index) => ({ ...cell, key: `${cell.ratName}-${cell.arfcn}-${cell.pci}-${index}` })),
     [cells],
   );
 
@@ -227,7 +435,7 @@ export const ScanPanel: React.FC<Props> = ({ onLock, onScanningChange, disabled 
   return (
     <PageCard
       title="全网扫频"
-      hint="模组直接扫出频段、频点、PCI 与子载波间隔，可据此一键锁定；支持无卡扫描。扫描期间模组被独占，其它操作请先取消。"
+      hint="优先显示可直接用于锁频的 ARFCN，括号内附中心频率。扫描前会临时释放数据拨号，完成或取消后自动恢复。"
       extra={
         <Space>
           {scanning ? (
@@ -324,7 +532,7 @@ export const ScanPanel: React.FC<Props> = ({ onLock, onScanningChange, disabled 
                     </Tag>
                     <b>
                       {cell.band == null ? '—' : cell.ratName === 'NR' ? `n${cell.band}` : `B${cell.band}`}
-                      {cell.freq != null ? ` · ${cell.freq}` : ''}
+                      {cell.arfcn != null ? ` · ${channelText(cell)}` : ''}
                     </b>
                     {cell.pci != null ? <span>PCI {cell.pci}</span> : null}
                   </div>
@@ -341,7 +549,7 @@ export const ScanPanel: React.FC<Props> = ({ onLock, onScanningChange, disabled 
                     onLockRef.current({
                       type: cell.ratName as 'LTE' | 'NR',
                       band: cell.band as number,
-                      arfcn: String(cell.freq),
+                      arfcn: String(cell.arfcn),
                       pci: String(cell.pci),
                       scs: cell.scs ?? undefined,
                     })
