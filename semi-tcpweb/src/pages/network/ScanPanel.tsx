@@ -15,6 +15,7 @@ import {
   type ScanPush,
 } from '@/modem/cellscan';
 import { LTE_BANDS, NR_BANDS, SCS_TYPES } from '@/modem/lock';
+import { buildAutoDialRestoreCommand, parseAutoDial, type AutoDialConfig } from '@/modem/autodial';
 import { Field, PageCard, TwoCol } from '@/ui/widgets';
 
 const at = () => ATService.getInstance();
@@ -24,7 +25,8 @@ const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(r
 
 interface ScanDialSnapshot {
   autoDialEnabled: boolean;
-  dialMode: number;
+  /** 关闭前 ^SETAUTODIAL? 的完整应答，恢复时原样回放以免丢掉 APN/鉴权配置 */
+  autoDial: AutoDialConfig | null;
   ndisActive: boolean;
 }
 
@@ -123,10 +125,11 @@ export const ScanPanel: React.FC<Props> = ({ onLock, onScanningChange, disabled 
 
     const restoring = (async () => {
       try {
-        // 原先开启自动拨号时恢复其配置即可，它会自行重建数据会话；原先仅有手动
-        // NDIS 会话时才显式重新拨号，避免对同一个 CID 重复发起连接。
+        // 原先开启自动拨号时按快照原样恢复（含 APN/鉴权字段，手册 16.18.1），
+        // 它会自行重建数据会话；原先仅有手动 NDIS 会话时才显式重新拨号，
+        // 避免对同一个 CID 重复发起连接。
         const command = snapshot.autoDialEnabled
-          ? `AT^SETAUTODIAL=1,${snapshot.dialMode}`
+          ? buildAutoDialRestoreCommand(snapshot.autoDial ?? { enable: 1 })
           : snapshot.ndisActive
             ? 'AT^NDISDUP=1,1'
             : '';
@@ -151,12 +154,11 @@ export const ScanPanel: React.FC<Props> = ({ onLock, onScanningChange, disabled 
   const prepareDialForScan = async () => {
     preparingDialRef.current = true;
     try {
-      const autoDialRaw = await queryText('AT^SETAUTODIAL?');
-      const autoDialMatch = autoDialRaw.match(/\^SETAUTODIAL:\s*(\d+)(?:\s*,\s*(\d+))?/i);
+      const autoDial = parseAutoDial(await queryText('AT^SETAUTODIAL?'));
       const ndisRaw = await queryText('AT^NDISSTATQRY?');
       const snapshot: ScanDialSnapshot = {
-        autoDialEnabled: autoDialMatch?.[1] === '1',
-        dialMode: autoDialMatch?.[2] ? Number(autoDialMatch[2]) : 1,
+        autoDialEnabled: autoDial?.enable === 1,
+        autoDial,
         ndisActive: /\^NDISSTATQRY:\s*1\s*,/i.test(ndisRaw),
       };
       dialSnapshotRef.current = snapshot;

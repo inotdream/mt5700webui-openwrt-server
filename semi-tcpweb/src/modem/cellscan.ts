@@ -119,18 +119,37 @@ interface LteBandRaster {
   max: number;
 }
 
-// 扫频和邻区页面目前支持的 LTE 频段；这里使用下行 EARFCN 栅格。
+// LTE 下行 EARFCN 栅格，3GPP TS 36.101 Table 5.7.3-1：
+// F_DL = F_DL_low + 0.1 MHz × (N_DL − N_Offs-DL)。low100Khz 即 F_DL_low 以 100 kHz 计。
 const LTE_BAND_RASTERS: Record<number, LteBandRaster> = {
   1: { low100Khz: 21100, offset: 0, min: 0, max: 599 },
+  2: { low100Khz: 19300, offset: 600, min: 600, max: 1199 },
   3: { low100Khz: 18050, offset: 1200, min: 1200, max: 1949 },
+  4: { low100Khz: 21100, offset: 1950, min: 1950, max: 2399 },
   5: { low100Khz: 8690, offset: 2400, min: 2400, max: 2649 },
+  7: { low100Khz: 26200, offset: 2750, min: 2750, max: 3449 },
   8: { low100Khz: 9250, offset: 3450, min: 3450, max: 3799 },
+  12: { low100Khz: 7290, offset: 5010, min: 5010, max: 5179 },
+  13: { low100Khz: 7460, offset: 5180, min: 5180, max: 5279 },
+  17: { low100Khz: 7340, offset: 5730, min: 5730, max: 5849 },
+  18: { low100Khz: 8600, offset: 5850, min: 5850, max: 5999 },
+  19: { low100Khz: 8750, offset: 6000, min: 6000, max: 6149 },
+  20: { low100Khz: 7910, offset: 6150, min: 6150, max: 6449 },
+  25: { low100Khz: 19300, offset: 8040, min: 8040, max: 8689 },
+  26: { low100Khz: 8590, offset: 8690, min: 8690, max: 9039 },
+  28: { low100Khz: 7580, offset: 9210, min: 9210, max: 9659 },
   34: { low100Khz: 20100, offset: 36200, min: 36200, max: 36349 },
   38: { low100Khz: 25700, offset: 37750, min: 37750, max: 38249 },
   39: { low100Khz: 18800, offset: 38250, min: 38250, max: 38649 },
   40: { low100Khz: 23000, offset: 38650, min: 38650, max: 39649 },
   41: { low100Khz: 24960, offset: 39650, min: 39650, max: 41589 },
+  42: { low100Khz: 34000, offset: 41590, min: 41590, max: 43589 },
+  43: { low100Khz: 36000, offset: 43590, min: 43590, max: 45589 },
+  66: { low100Khz: 21100, offset: 66436, min: 66436, max: 67335 },
 };
+
+// EARFCN 是 16 位数（TS 36.101 上限 65535），比它大的值只可能是 kHz 频率。
+const MAX_EARFCN = 65535;
 
 /** 把锁频/邻区接口使用的 ARFCN 转为便于阅读的中心频率。 */
 export const arfcnToFrequencyMhz = (
@@ -145,13 +164,25 @@ export const arfcnToFrequencyMhz = (
   return (raster.low100Khz + arfcn - raster.offset) / 10;
 };
 
+// 手册 5.35.3：LTE/NR 下 <freq> 上报的是 kHz 频率，只有 GSM/WCDMA 才是频点。
+// 换算不出可靠 EARFCN 的情况一律返回 arfcn=null：锁频按钮据此禁用，
+// 绝不能把 kHz 原值当 ARFCN 塞进 AT^LTEFREQLOCK。
 const normalizeLteFrequency = (raw: number, band: number | null): NormalizedFrequency => {
   const raster = band == null ? undefined : LTE_BAND_RASTERS[band];
-  if (!raster) return { arfcn: raw, frequencyMhz: null };
+  if (!raster) {
+    // 频段没有栅格表：值大于 EARFCN 上限的一定是 kHz，至少把频率显示出来；
+    // 否则当作某些固件直接上报的 EARFCN，但没有栅格算不出频率。
+    return raw > MAX_EARFCN
+      ? { arfcn: null, frequencyMhz: raw / 1000 }
+      : { arfcn: raw, frequencyMhz: null };
+  }
 
   const rawIsArfcn = raw >= raster.min && raw <= raster.max;
   const arfcn = rawIsArfcn ? raw : raster.offset + Math.round(raw / 100 - raster.low100Khz);
-  if (arfcn < raster.min || arfcn > raster.max) return { arfcn: raw, frequencyMhz: null };
+  if (arfcn < raster.min || arfcn > raster.max) {
+    // 频率落在该频段的栅格之外，频段和频率对不上，只展示频率不给锁
+    return { arfcn: null, frequencyMhz: raw > MAX_EARFCN ? raw / 1000 : null };
+  }
   return { arfcn, frequencyMhz: arfcnToFrequencyMhz('LTE', arfcn, band) };
 };
 

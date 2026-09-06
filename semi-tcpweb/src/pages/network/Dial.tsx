@@ -16,6 +16,7 @@ import { ATService } from '@/services/at';
 import { useATReady } from '@/hooks/useATReady';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { sleep } from '@/modem/atx';
+import { parseAutoDial } from '@/modem/autodial';
 import { ConfigSelect, Field, PageCard, RefreshBtn, SectionHeader, TwoCol } from '@/ui/widgets';
 
 const at = () => ATService.getInstance();
@@ -85,29 +86,8 @@ const getDialModeText = (mode?: number) => {
   return mode == null ? '未识别' : map[mode] || '未知';
 };
 
-const parseAutoDialResponse = (raw: string): Partial<DialSettings> | null => {
-  const line = raw
-    .replace(/\r/g, '')
-    .split('\n')
-    .map((item) => item.trim())
-    .find((item) => item.startsWith('^SETAUTODIAL:'));
-  if (!line) return null;
-
-  const payload = line.slice(line.indexOf(':') + 1).trim();
-  const fields = payload.match(/(?:[^,"]+|"[^"]*")+/g)?.map((field) =>
-    field.trim().replace(/^"|"$/g, ''),
-  );
-  if (!fields?.length || !/^\d+$/.test(fields[0])) return null;
-
-  const parsed: Partial<DialSettings> = { enable: Number(fields[0]) };
-  if (fields.length >= 2 && /^\d+$/.test(fields[1])) parsed.dialMode = Number(fields[1]);
-  if (fields.length >= 3) parsed.protocol = fields[2] || '';
-  if (fields.length >= 4) parsed.apn = fields[3] || '';
-  if (fields.length >= 5) parsed.username = fields[4] || '';
-  if (fields.length >= 6) parsed.password = fields[5] || '';
-  if (fields.length >= 7 && /^\d+$/.test(fields[6])) parsed.authType = Number(fields[6]);
-  return parsed;
-};
+// 解析放在 @/modem/autodial 里，扫频面板临时关/恢复自动拨号时也用同一份。
+const parseAutoDialResponse = (raw: string): Partial<DialSettings> | null => parseAutoDial(raw);
 
 const ndisIsActive = (raw: string) =>
   /\^NDISSTATQRY:\s*1\s*,/i.test(raw.replace(/\r/g, ''));
