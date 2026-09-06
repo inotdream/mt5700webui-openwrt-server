@@ -1,0 +1,144 @@
+name: build
+
+on:
+  push:
+    branches: [main, feat/go-backend]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  frontend:
+    name: WebUI 类型检查与构建
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: semi-tcpweb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: semi-tcpweb/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run build
+      - name: 校验插件内 WebUI 与最新源码一致
+        run: |
+          before=$(find ../at-webserver/files/www/5700 -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)
+          npm run sync:www
+          after=$(find ../at-webserver/files/www/5700 -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)
+          test "$before" = "$after"
+
+  backend:
+    name: Go 后端 vet 与单测
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: at-webserver/src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: at-webserver/src/go.sum
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  package:
+    name: ${{ matrix.arch }} · ${{ matrix.release == 'SNAPSHOT' && 'apk' || 'ipk' }}
+    needs: [frontend, backend]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - aarch64_cortex-a53
+          - aarch64_generic
+          - arm_cortex-a7_neon-vfpv4
+          - mipsel_24kc
+          - mips_24kc
+          - x86_64
+        # openwrt-24.10 分支 SDK 产出 .ipk；主干 SNAPSHOT 已切换 apk 包管理器，产出 .apk
+        release: [openwrt-24.10, SNAPSHOT]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SDK 构建软件包
+        uses: openwrt/gh-action-sdk@v11
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.release }}
+          FEEDNAME: mt5700
+          PACKAGES: at-webserver luci-app-at-webserver
+          NO_REFRESH_CHECK: true
+          V: s
+
+      - name: 收集产物
+        run: |
+          mkdir -p out
+          shopt -s nullglob
+          for f in bin/packages/*/mt5700/*.ipk bin/packages/*/mt5700/*.apk; do
+            base=$(basename "$f")
+            case "$base" in
+              luci-app-at-webserver*)
+                # 架构无关包，只收 x86_64 那一份，避免 Release 里出现 12 个重复文件
+                if [ "${{ matrix.arch }}" = "x86_64" ]; then cp "$f" "out/$base"; fi
+                ;;
+              *${{ matrix.arch }}*)
+                cp "$f" "out/$base"
+                ;;
+              *.ipk) cp "$f" "out/${base%.ipk}_${{ matrix.arch }}.ipk" ;;
+              *.apk) cp "$f" "out/${base%.apk}_${{ matrix.arch }}.apk" ;;
+            esac
+          done
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.arch }}-${{ matrix.release }}
+          path: out/*
+          if-no-files-found: error
+
+  release:
+    name: 发布 Release
+    # 打 v* tag 时发布；个别架构失败也照发已构建出的产物
+    if: startsWith(github.ref, 'refs/tags/v') && !cancelled()
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: ls -l dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            ## 安装说明
+
+            两个包都要装：`at-webserver`（后端+WebUI）和 `luci-app-at-webserver`（LuCI 集成，架构无关）。
+
+            **OpenWrt 24.10 及更早（opkg）**，按设备架构下载 `.ipk`：
+
+            ```sh
+            opkg install ./at-webserver_*_<架构>.ipk ./luci-app-at-webserver_*_all.ipk
+            ```
+
+            **OpenWrt 主干 SNAPSHOT（apk）**，下载 `.apk`：
+
+            ```sh
+            apk add --allow-untrusted ./at-webserver-*_<架构>.apk ./luci-app-at-webserver-*.apk
+            ```
+
+            常见架构对照：MT7621 → `mipsel_24kc`；MT7981/MT7986/IPQ807x → `aarch64_cortex-a53`；IPQ40xx → `arm_cortex-a7_neon-vfpv4`；ath79 → `mips_24kc`；x86 软路由 → `x86_64`；其他 ARM64 → `aarch64_generic`。
+
+            安装后访问 `http://路由器IP/5700/`。

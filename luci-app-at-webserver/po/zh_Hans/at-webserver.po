@@ -259,11 +259,11 @@ msgstr "WebSocket 默认监听所有网卡（0.0.0.0），局域网内可正常�
 msgid "读取日志文件失败: %s"
 msgstr "读取日志文件失败: %s"
 
-msgid "Python 运行日志"
-msgstr "Python 运行日志"
+msgid "服务运行日志"
+msgstr "服务运行日志"
 
-msgid "查看 AT WebServer Python 脚本的运行状态和系统日志"
-msgstr "查看 AT WebServer Python 脚本的运行状态和系统日志"
+msgid "查看 AT WebServer 的运行状态和系统日志"
+msgstr "查看 AT WebServer 的运行状态和系统日志"
 
 msgid "日志来源"
 msgstr "日志来源"

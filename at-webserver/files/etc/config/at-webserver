@@ -7,13 +7,17 @@ config at-webserver 'config'
 	option network_timeout '10'
 	option network_allow_wan '0'          # 是否允许外网访问模块 (0=禁止, 1=允许)
 	option network_restrict_access '0'    # 限制只有路由器本身可访问模块 (0=允许局域网, 1=仅路由器)
-	option serial_port '/dev/ttyUSB0'
-	option serial_port_custom '/dev/ttyUSB0'  # 自定义串口路径（当 serial_port='custom' 时使用）
+	# AT 命令走 PCUI 口，MT5700M-CN 上默认枚举为 ttyUSB1
+	# （ttyUSB0=Application Interface, ttyUSB1=PCUI, ttyUSB2=SerialB, ttyUSB3=SerialC, ttyUSB4=GPS）
+	# 填 'auto' 则逐个探测 /dev/ttyUSB* 自动选出能应答 AT 的端口
+	option serial_port '/dev/ttyUSB1'
+	option serial_port_custom '/dev/ttyUSB1'  # 自定义串口路径（当 serial_port='custom' 时使用）
 	option serial_baudrate '115200'
 	option serial_timeout '10'
 	option websocket_port '8765'
 	option websocket_allow_wan '0'          # 是否允许外网访问 WebSocket (0=禁止, 1=允许)
 	option websocket_auth_key ''            # WebSocket 连接密钥（留空则不验证）
+	option cellscan_timeout '180'           # 一次 ^CELLSCAN 全网扫频允许运行的秒数（下限 10）
 	
 	# 通知配置
 	option wechat_webhook ''

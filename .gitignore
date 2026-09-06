@@ -1,0 +1,14 @@
+# Go 编译产物（vendor/ 需要提交，编译时不联网靠它）
+at-webserver/src/at-webserver
+at-webserver/src/at-webserver-linux-*
+
+# Python 缓存（1.x 遗留）
+__pycache__/
+*.pyc
+
+# 编辑器与系统文件
+.DS_Store
+*.swp
+
+# 厂商 AT 命令手册（版权文档，本地参考用，不入库）
+at-webserver/*.pdf

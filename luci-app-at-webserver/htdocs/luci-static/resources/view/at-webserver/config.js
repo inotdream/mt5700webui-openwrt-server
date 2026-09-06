@@ -108,8 +108,21 @@ return view.extend({
 	o.rmempty = false;
 
 	// 串口连接配置
+	// MT5700M-CN 的端口映射固定为：
+	//   ttyUSB0=Application Interface, ttyUSB1=PCUI, ttyUSB2=SerialB,
+	//   ttyUSB3=SerialC, ttyUSB4=GPS
+	// AT 命令要走 PCUI，也就是 ttyUSB1。
+	var PORT_ROLES = {
+		'/dev/ttyUSB0': _('Application Interface'),
+		'/dev/ttyUSB1': _('PCUI · AT 命令口'),
+		'/dev/ttyUSB2': _('SerialB'),
+		'/dev/ttyUSB3': _('SerialC'),
+		'/dev/ttyUSB4': _('GPS')
+	};
+
 	o = s.option(form.ListValue, 'serial_port', _('串口设备'),
-		_('选择串口设备或手动输入路径'));
+		_('AT 命令需要走模组的 PCUI 口，在 MT5700M-CN 上通常是 <code>/dev/ttyUSB1</code>。' +
+		  '不确定就选“自动探测”，服务会逐个发 AT 找出能应答的端口。'));
 	o.depends('connection_type', 'SERIAL');
 	
 	// 动态添加系统中可用的串口设备
@@ -124,6 +137,9 @@ return view.extend({
 			// 清空现有选项
 			this.keylist = [];
 			this.vallist = [];
+
+			// 自动探测放在最前面，作为不确定时的稳妥选择
+			this.value('auto', _('自动探测（逐个发 AT 试）'));
 			
 			// 添加常见串口设备
 			var serialDevices = [];
@@ -135,37 +151,44 @@ return view.extend({
 				}
 			});
 			
-			// 排序
-			serialDevices.sort();
+			// 按编号数字序排列，避免 ttyUSB10 排到 ttyUSB2 前面
+			serialDevices.sort(function(a, b) {
+				var na = a.match(/(\d+)$/), nb = b.match(/(\d+)$/);
+				if (na && nb && a.replace(/\d+$/, '') === b.replace(/\d+$/, ''))
+					return parseInt(na[1]) - parseInt(nb[1]);
+				return a < b ? -1 : (a > b ? 1 : 0);
+			});
 			
-			// 添加到下拉列表
+			// 添加到下拉列表，已知用途的端口标注出来
 			if (serialDevices.length > 0) {
 				serialDevices.forEach(L.bind(function(dev) {
-					this.value(dev, dev);
+					var role = PORT_ROLES[dev];
+					this.value(dev, role ? dev + ' — ' + role : dev);
 				}, this));
 			} else {
-				// 如果没有找到设备，添加默认选项
-				this.value('/dev/ttyUSB0', '/dev/ttyUSB0 (默认)');
+				// 如果没有找到设备，至少给出 PCUI 口作为默认
+				this.value('/dev/ttyUSB1', '/dev/ttyUSB1 — ' + PORT_ROLES['/dev/ttyUSB1']);
 			}
 			
 			// 添加自定义选项
 			this.value('custom', _('自定义路径...'));
 			
 			// 如果当前值不在列表中，添加它
-			if (currentValue && !serialDevices.includes(currentValue) && currentValue !== 'custom') {
+			if (currentValue && !serialDevices.includes(currentValue) &&
+			    currentValue !== 'custom' && currentValue !== 'auto') {
 				this.value(currentValue, currentValue + ' (当前)');
 			}
 			
 			return currentValue;
 		}, this));
 	};
-	o.default = '/dev/ttyUSB0';
+	o.default = '/dev/ttyUSB1';
 	
 	// 自定义串口路径输入框
 	o = s.option(form.Value, 'serial_port_custom', _('自定义串口路径'),
 		_('输入完整的串口设备路径'));
 	o.depends('serial_port', 'custom');
-	o.placeholder = '/dev/ttyUSB0';
+	o.placeholder = '/dev/ttyUSB1';
 	o.rmempty = false;
 
 		o = s.option(form.ListValue, 'serial_baudrate', _('波特率'),
@@ -264,121 +287,140 @@ return view.extend({
 	o.rmempty = false;
 	o.default = '1';
 
-	// 定时锁频配置标题 - 暂时隐藏
-	// o = s.option(form.DummyValue, '_schedule_title', _('定时锁频设置'));
-	// o.rawhtml = true;
-	// o.cfgvalue = function() {
-	// 	return '<h3>' + _('根据时间自动切换锁定的基站频段') + '</h3>';
-	// };
+	// ===== 定时锁频 =====
+	o = s.option(form.DummyValue, '_schedule_title', _('定时锁频设置'));
+	o.rawhtml = true;
+	o.cfgvalue = function() {
+		return '<h3>' + _('根据时间自动切换锁定的基站频段') + '</h3>';
+	};
 
-	// o = s.option(form.Flag, 'schedule_enabled', _('启用定时锁频'),
-	// 	_('根据时间自动切换锁定的基站频段（适用于晚上基站关闭、锁频场景）'));
-	// o.rmempty = false;
-	// o.default = '0';
+	o = s.option(form.Flag, 'schedule_enabled', _('启用定时锁频'),
+		_('根据时间自动切换锁定的基站频段（适用于夜间基站负载低、想锁到特定频段的场景）'));
+	o.rmempty = false;
+	o.default = '0';
 
-	// 定时锁频相关配置 - 暂时隐藏
-	// o = s.option(form.Value, 'schedule_check_interval', _('检测间隔（秒）'),
-	// 	_('检查网络状态的时间间隔'));
-	// o.datatype = 'uinteger';
-	// o.default = '60';
-	// o.depends('schedule_enabled', '1');
+	o = s.option(form.Value, 'schedule_check_interval', _('检测间隔（秒）'),
+		_('检查网络状态与时段的时间间隔，最小 10 秒'));
+	o.datatype = 'min(10)';
+	o.default = '60';
+	o.depends('schedule_enabled', '1');
 
-	// o = s.option(form.Value, 'schedule_timeout', _('无服务超时（秒）'),
-	// 	_('无网络服务超过此时间后，自动执行恢复操作'));
-	// o.datatype = 'uinteger';
-	// o.default = '180';
-	// o.depends('schedule_enabled', '1');
+	o = s.option(form.Value, 'schedule_timeout', _('无服务超时（秒）'),
+		_('锁频后如果持续无网络服务超过此时间，自动解锁恢复，最小 30 秒'));
+	o.datatype = 'min(30)';
+	o.default = '180';
+	o.depends('schedule_enabled', '1');
 
-	// o = s.option(form.Flag, 'schedule_unlock_lte', _('解锁 LTE 锁频锁小区'),
-	// 	_('恢复时自动解除 LTE 的频点、小区、Band 锁定'));
-	// o.rmempty = false;
-	// o.default = '1';
-	// o.depends('schedule_enabled', '1');
+	o = s.option(form.Flag, 'schedule_unlock_lte', _('解锁 LTE 锁频锁小区'),
+		_('锁定类型选“解锁”时，下发 LTE 解锁命令'));
+	o.rmempty = false;
+	o.default = '1';
+	o.depends('schedule_enabled', '1');
 
-	// o = s.option(form.Flag, 'schedule_unlock_nr', _('解锁 NR（5G）锁频锁小区'),
-	// 	_('恢复时自动解除 NR 5G 的频点、小区、Band 锁定'));
-	// o.rmempty = false;
-	// o.default = '1';
-	// o.depends('schedule_enabled', '1');
+	o = s.option(form.Flag, 'schedule_unlock_nr', _('解锁 NR（5G）锁频锁小区'),
+		_('锁定类型选“解锁”时，下发 NR 解锁命令'));
+	o.rmempty = false;
+	o.default = '1';
+	o.depends('schedule_enabled', '1');
 
-	// o = s.option(form.Flag, 'schedule_toggle_airplane', _('切换飞行模式'),
-	// 	_('解锁后切换飞行模式使配置立即生效（推荐开启）'));
-	// o.rmempty = false;
-	// o.default = '1';
-	// o.depends('schedule_enabled', '1');
+	o = s.option(form.Flag, 'schedule_toggle_airplane', _('切换飞行模式'),
+		_('下发锁频前后切换飞行模式使配置立即生效（推荐开启）'));
+	o.rmempty = false;
+	o.default = '1';
+	o.depends('schedule_enabled', '1');
 
-	// 夜间模式配置 - 暂时隐藏
-	// o = s.option(form.DummyValue, '_night_mode_title', _('夜间模式'));
-	// o.rawhtml = true;
-	// o.cfgvalue = function() {
-	// 	return '<h4>' + _('夜间时段锁频设置') + '</h4>';
-	// };
-	// o.depends('schedule_enabled', '1');
+	// 夜间时段
+	o = s.option(form.Flag, 'schedule_night_enabled', _('启用夜间模式'),
+		_('在夜间时段自动切换到下面配置的频段'));
+	o.rmempty = false;
+	o.default = '1';
+	o.depends('schedule_enabled', '1');
 
-	// 夜间模式配置选项 - 暂时隐藏
-	// o = s.option(form.Flag, 'schedule_night_enabled', _('启用夜间模式'),
-	// 	_('在夜间时段自动切换到指定的频段'));
-	// o.rmempty = false;
-	// o.default = '1';
-	// o.depends('schedule_enabled', '1');
+	o = s.option(form.Value, 'schedule_night_start', _('夜间开始时间'),
+		_('格式 HH:MM，允许跨零点，例如 22:00 到 06:00'));
+	o.placeholder = '22:00';
+	o.default = '22:00';
+	o.depends('schedule_night_enabled', '1');
 
-	// o = s.option(form.Value, 'schedule_night_start', _('夜间开始时间'),
-	// 	_('夜间模式开始时间，格式：HH:MM'));
-	// o.placeholder = '22:00';
-	// o.default = '22:00';
-	// o.depends('schedule_night_enabled', '1');
+	o = s.option(form.Value, 'schedule_night_end', _('夜间结束时间'),
+		_('格式 HH:MM'));
+	o.placeholder = '06:00';
+	o.default = '06:00';
+	o.depends('schedule_night_enabled', '1');
 
-	// o = s.option(form.Value, 'schedule_night_end', _('夜间结束时间'),
-	// 	_('夜间模式结束时间，格式：HH:MM'));
-	// o.placeholder = '06:00';
-	// o.default = '06:00';
-	// o.depends('schedule_night_enabled', '1');
+	// 夜间与日间的 LTE/NR 选项结构完全一致，用一个函数生成，避免几百行重复。
+	function addLockOptions(prefix, gateOption, label) {
+		var lteType = s.option(form.ListValue, prefix + '_lte_type', label + _(' LTE 锁定类型'),
+			_('解锁 = 不限制；频段锁定只锁 Band；频点锁定需要填频点；小区锁定还需要 PCI'));
+		lteType.value('0', _('解锁'));
+		lteType.value('1', _('频点锁定'));
+		lteType.value('2', _('小区锁定'));
+		lteType.value('3', _('频段锁定'));
+		lteType.default = '3';
+		lteType.depends(gateOption, '1');
 
-	// LTE 配置 - 暂时隐藏
-	// o = s.option(form.ListValue, 'schedule_night_lte_type', _('夜间 LTE 锁定类型'),
-	// 	_('选择 LTE 的锁定方式'));
-	// o.value('0', _('解锁'));
-	// o.value('1', _('频点锁定'));
-	// o.value('2', _('小区锁定'));
-	// o.value('3', _('频段锁定'));
-	// o.default = '3';
-	// o.depends('schedule_night_enabled', '1');
+		var lteBands = s.option(form.Value, prefix + '_lte_bands', label + _(' LTE 频段'),
+			_('用逗号分隔，如 3,8,41'));
+		lteBands.placeholder = '3,8';
+		lteBands.depends(prefix + '_lte_type', '1');
+		lteBands.depends(prefix + '_lte_type', '2');
+		lteBands.depends(prefix + '_lte_type', '3');
 
-	// LTE 频段配置 - 暂时隐藏
-	// o = s.option(form.Value, 'schedule_night_lte_bands', _('LTE 频段'),
-	// 	_('LTE 频段，用逗号分隔，如：3,8。注意：频点锁定时，每个频段对应一个频点<br/><small>💡 提示：可以输入多个频段，用逗号分隔，如：3,8,41</small>'));
-	// o.placeholder = '3,8';
-	// o.depends('schedule_night_lte_type', '1');
-	// o.depends('schedule_night_lte_type', '2');
-	// o.depends('schedule_night_lte_type', '3');
+		var lteArfcns = s.option(form.Value, prefix + '_lte_arfcns', label + _(' LTE 频点'),
+			_('用逗号分隔，数量必须与频段一致，如频段 3,8 对应 1850,3450'));
+		lteArfcns.placeholder = '1850,3450';
+		lteArfcns.depends(prefix + '_lte_type', '1');
+		lteArfcns.depends(prefix + '_lte_type', '2');
 
-	// 所有定时锁频相关配置 - 暂时隐藏
-	// o = s.option(form.Value, 'schedule_night_lte_arfcns', _('LTE 频点'),
-	// 	_('LTE 频点，用逗号分隔，如：1850,3450。必须与频段一一对应<br/><small>💡 提示：频点数量必须与频段数量相同，如：3,8 对应 1850,3450</small>'));
-	// o.placeholder = '1850,3450';
-	// o.depends('schedule_night_lte_type', '1');
-	// o.depends('schedule_night_lte_type', '2');
+		var ltePcis = s.option(form.Value, prefix + '_lte_pcis', label + _(' LTE PCI'),
+			_('用逗号分隔，数量必须与频段一致，仅小区锁定需要'));
+		ltePcis.placeholder = '256,128';
+		ltePcis.depends(prefix + '_lte_type', '2');
 
-	// o = s.option(form.Value, 'schedule_night_lte_pcis', _('LTE PCI'),
-	// 	_('LTE PCI，用逗号分隔，如：256,128。必须与频段一一对应<br/><small>💡 提示：小区锁定时才需要填写，PCI数量必须与频段数量相同</small>'));
-	// o.placeholder = '256,128';
-	// o.depends('schedule_night_lte_type', '2');
+		var nrType = s.option(form.ListValue, prefix + '_nr_type', label + _(' NR 锁定类型'),
+			_('NR（5G）的锁定方式'));
+		nrType.value('0', _('解锁'));
+		nrType.value('1', _('频点锁定'));
+		nrType.value('2', _('小区锁定'));
+		nrType.value('3', _('频段锁定'));
+		nrType.default = '3';
+		nrType.depends(gateOption, '1');
 
-	// NR 配置 - 暂时隐藏
-	// o = s.option(form.ListValue, 'schedule_night_nr_type', _('夜间 NR 锁定类型'),
-	// 	_('选择 NR 5G 的锁定方式'));
-	// o.value('0', _('解锁'));
-	// o.value('1', _('频点锁定'));
-	// o.value('2', _('小区锁定'));
-	// o.value('3', _('频段锁定'));
-	// o.default = '3';
-	// o.depends('schedule_night_enabled', '1');
+		var nrBands = s.option(form.Value, prefix + '_nr_bands', label + _(' NR 频段'),
+			_('用逗号分隔，如 78,41'));
+		nrBands.placeholder = '78';
+		nrBands.depends(prefix + '_nr_type', '1');
+		nrBands.depends(prefix + '_nr_type', '2');
+		nrBands.depends(prefix + '_nr_type', '3');
 
-	// 所有定时锁频相关配置 - 暂时隐藏
-	// 包括夜间模式、日间模式的所有 LTE/NR 配置选项
+		var nrArfcns = s.option(form.Value, prefix + '_nr_arfcns', label + _(' NR 频点'),
+			_('用逗号分隔，数量必须与频段一致'));
+		nrArfcns.placeholder = '630000';
+		nrArfcns.depends(prefix + '_nr_type', '1');
+		nrArfcns.depends(prefix + '_nr_type', '2');
 
-	// 所有定时锁频相关配置已隐藏
-	// 包括夜间模式、日间模式的所有 LTE/NR 配置选项
+		var nrScs = s.option(form.Value, prefix + '_nr_scs_types', label + _(' NR 子载波间隔'),
+			_('0 = 15kHz，1 = 30kHz，用逗号分隔。留空则按频段自动推断'));
+		nrScs.placeholder = '1';
+		nrScs.depends(prefix + '_nr_type', '1');
+		nrScs.depends(prefix + '_nr_type', '2');
+
+		var nrPcis = s.option(form.Value, prefix + '_nr_pcis', label + _(' NR PCI'),
+			_('用逗号分隔，数量必须与频段一致，仅小区锁定需要'));
+		nrPcis.placeholder = '100';
+		nrPcis.depends(prefix + '_nr_type', '2');
+	}
+
+	addLockOptions('schedule_night', 'schedule_night_enabled', _('夜间'));
+
+	// 日间时段
+	o = s.option(form.Flag, 'schedule_day_enabled', _('启用日间模式'),
+		_('非夜间时段自动切换到下面配置的频段'));
+	o.rmempty = false;
+	o.default = '1';
+	o.depends('schedule_enabled', '1');
+
+	addLockOptions('schedule_day', 'schedule_day_enabled', _('日间'));
 
 	return m.render();
 	},

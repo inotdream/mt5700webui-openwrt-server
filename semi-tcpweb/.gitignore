@@ -1,0 +1,8 @@
+node_modules
+dist
+.DS_Store
+*.local
+.vite
+
+# 设计语言/skill 素材，仅本地参考，不入库
+design-system/
