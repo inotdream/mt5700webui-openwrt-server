@@ -5,7 +5,13 @@ STOP=10
 
 USE_PROCD=1
 PROG=/usr/bin/at-webserver
-PROG_NAME="at-webserver"
+
+# 注意：这个脚本里绝不能出现 killall/pkill at-webserver。
+# 通过 shebang 执行的脚本，进程 comm 就是脚本文件名 "at-webserver"，
+# 和二进制同名，按名字杀会把正在执行的 init 脚本自己杀掉（表现为 opkg 安装时
+# "Configuring at-webserver. Terminated"，LuCI 保存/重启后服务反复消失）。
+# 进程生命周期全部交给 procd：start 时同名实例的命令若有变化 procd 会自动替换，
+# stop 时 rc.common 会调 procd_kill。
 
 # 加载 UCI 函数库（必须在文件顶部）
 . /lib/functions.sh
@@ -214,10 +220,6 @@ start_service() {
 	
 	setup_firewall
 	
-	# 清理可能残留的旧进程（含 1.x 的 Python 版本），用 TERM 让其正常退出
-	killall -q at-server.py 2>/dev/null
-	killall -q "$PROG_NAME" 2>/dev/null
-	
 	logger -t at-webserver "配置 procd 实例..."
 	echo "Starting AT WebServer..."
 	
@@ -238,10 +240,7 @@ stop_service() {
 	logger -t at-webserver "停止服务..."
 	echo "Stopping AT WebServer..."
 	
-	# 交给 procd 停止实例；这里只发 TERM 兜底，让服务能优雅关闭连接
-	killall -q "$PROG_NAME" 2>/dev/null
-	
-	# 清理 pidfile
+	# 守护进程由 rc.common 在本函数之后通过 procd_kill 停止，这里只做收尾清理
 	rm -f /var/run/at-webserver.pid
 	
 	# 清理防火墙规则
@@ -289,22 +288,13 @@ stop_service() {
 	echo "AT WebServer stopped"
 }
 
+# 配置变更后需要重建防火墙规则并让守护进程重读 UCI，直接走完整的 stop/start。
+# stop/start 是 rc.common 提供的入口，会正确经过 procd_kill 与 rc_procd。
 reload_service() {
-	logger -t at-webserver "重新加载配置..."
+	logger -t at-webserver "配置已变更，重启服务以应用..."
 	echo "Reloading AT WebServer configuration..."
-	
-	# 提交最新配置
-	uci -q commit at-webserver
-	
-	killall -q "$PROG_NAME" 2>/dev/null
-	rm -f /var/run/at-webserver.pid
-	
-	# 等待进程退出
-	sleep 2
-	
-	# 重新启动服务
-	start_service
-	
+	stop
+	start
 	logger -t at-webserver "配置重新加载完成"
 }
 
