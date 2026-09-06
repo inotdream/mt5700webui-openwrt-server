@@ -155,11 +155,12 @@ const urcParsers: { keyword: string; parse: (line: string) => URCData | null }[]
     },
   },
   {
-    // ^DSAMBR: 8,500000,100000,"3gnet.MNC001.MCC460.GPRS"
-    // 速率单位是 bps；QCI 不在这里，得用 AT+CGEQOSRDP 查。
+    // 手册 16.17.1：^DSAMBR: <cid>,<DlApnAmbr>,<UlApnAmbr>，单位 kbps。
+    // 部分固件会多带第四个引号字段 APN（如 8,500000,100000,"3gnet.MNC001.MCC460.GPRS"），
+    // 它是可选的，不能因为没有就把整条上报丢掉。QCI 不在这里，得用 AT+CGEQOSRDP 查。
     keyword: '^DSAMBR:',
     parse: (line) => {
-      const match = line.match(/\^DSAMBR:\s*(\d+),(\d+),(\d+),"([^"]*)"/);
+      const match = line.match(/\^DSAMBR:\s*(\d+),(\d+),(\d+)(?:,"([^"]*)")?/);
       if (!match) return null;
       const [, cid, maxDlRate, maxUlRate, apn] = match;
       return {
@@ -169,7 +170,7 @@ const urcParsers: { keyword: string; parse: (line: string) => URCData | null }[]
           cid: parseInt(cid, 10),
           maxDownlinkRate: parseInt(maxDlRate, 10),
           maxUplinkRate: parseInt(maxUlRate, 10),
-          apn,
+          apn: apn ?? '',
         },
       };
     },

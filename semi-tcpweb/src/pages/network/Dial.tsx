@@ -550,7 +550,10 @@ const NetworkDial: React.FC = () => {
             if (!line.startsWith('+CGDCONT:')) return;
             const match = line.match(/\+CGDCONT: (\d+),"([^"]*)","([^"]*)",([^,]*),?(\d*),?(\d*)/);
             if (match) {
-              list.push({ cid: Number(match[1]), type: match[2], apn: match[3], pdp_addr: match[4] || '' });
+              // 手册 7.1.3：<PDP_addr> 是字符串类型，应答里带引号，去掉再展示，
+              // 否则编辑框里会出现 "0.0.0.0" 这种带引号的值。
+              const pdpAddr = match[4].trim().replace(/^"|"$/g, '');
+              list.push({ cid: Number(match[1]), type: match[2], apn: match[3], pdp_addr: pdpAddr });
             }
           });
       }
@@ -597,7 +600,9 @@ const NetworkDial: React.FC = () => {
     }
     setLoading((l) => ({ ...l, pdp: true }));
     try {
-      const cmd = `AT+CGDCONT=${editData.cid},"${editData.type}","${editData.apn || ''}",${editData.pdp_addr || ''},0,0`;
+      // <PDP_addr> 是字符串类型（手册 7.1.3），非空时必须带引号，否则模组回 ERROR；留空表示由网络分配。
+      const pdpAddr = (editData.pdp_addr || '').trim().replace(/^"|"$/g, '');
+      const cmd = `AT+CGDCONT=${editData.cid},"${editData.type}","${editData.apn || ''}",${pdpAddr ? `"${pdpAddr}"` : ''},0,0`;
       const res = await sendCmd(cmd);
       if (res.success) {
         Toast.success('保存成功');

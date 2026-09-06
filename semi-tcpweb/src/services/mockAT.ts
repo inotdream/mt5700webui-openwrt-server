@@ -533,19 +533,24 @@ export const resolveMockATCommand = (
         '^HFREQINFO: 2,4,3,1650,184500,20000,19650,175000,20000\nOK',
     );
   }
-  if (commandLine === 'AT^DSAMBR=1' || commandLine === 'AT^DSAMBR=8') {
-    return ok('^DSAMBR: 8,500000,100000,"cmnet"\nOK');
+  // 手册 16.17：^DSAMBR 只支持 cid 1，应答只有三个字段（kbps），没有 APN；
+  // 其它 cid 按手册回 ERROR，让 APN 走 +CGDCONT 兜底的逻辑在开发时就能跑到。
+  if (commandLine.startsWith('AT^DSAMBR=')) {
+    if (commandLine === 'AT^DSAMBR=1') return ok('^DSAMBR: 1,300000,75000\nOK');
+    return { success: false, error: '+CME ERROR: operation not supported' };
   }
-  if (commandLine === 'AT+CGEQOSRDP=8' || commandLine === 'AT+CGEQOSRDP=1') {
-    return ok('+CGEQOSRDP: 8,9,0,0,0,0,0,0,0,0,0,0\nOK');
+  // 手册 13.30.5：non-GBR 承载只回 <cid>,<QCI>
+  if (commandLine === 'AT+CGEQOSRDP' || commandLine === 'AT+CGEQOSRDP=1') {
+    return ok('+CGEQOSRDP: 1,9\nOK');
   }
+  // 手册 16.5.5 / 16.6.1：8 个字段，末尾两个是承载最大速率（bit/s）；未分配的地址是全零
   if (commandLine === 'AT^DHCPV6?') {
     return ok(
-      '^DHCPV6: 2409:8a1e:3a20:120::2,ffff:ffff:ffff:ffff::,fe80::1,fe80::1,2409:8088::a,2409:8088::b\nOK',
+      '^DHCPV6: 2409:8a1e:3a20:120::2,ffff:ffff:ffff:ffff::,fe80::1,::,2409:8088::a,2409:8088::b,1000000000,500000000\nOK',
     );
   }
   if (commandLine === 'AT^DHCP?') {
-    return ok('^DHCP: 0230170A,00FFFFFF,0130170A,0130170A,050505DF,1D1D1D77\nOK');
+    return ok('^DHCP: 0230170A,00FFFFFF,0130170A,00000000,050505DF,1D1D1D77,1000000000,500000000\nOK');
   }
   if (commandLine === 'AT^IPV6CAP?') return ok('^IPV6CAP: 7\nOK');
   if (commandLine === 'AT^DSFLOWQRY') {

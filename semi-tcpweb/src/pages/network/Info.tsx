@@ -15,6 +15,8 @@ import {
   extractATDataMultiline,
   formatDuration,
   formatFlow,
+  formatRateKbps,
+  isUnassignedAddress,
   splitSpeed,
   hexToIP,
   ipv6CapDescription,
@@ -86,8 +88,10 @@ const NetworkInfo: React.FC = () => {
   const [cell, setCell] = useState(EMPTY_CELL);
   const [apn, setApn] = useState('未知');
   const [qci, setQci] = useState('未知');
-  const [downSpeed, setDownSpeed] = useState(0);
-  const [upSpeed, setUpSpeed] = useState(0);
+  // 签约速率，单位 kbps；null 表示没拿到，界面显示 "—" 而不是把初始值画成 0.0 Mbps。
+  // ^DSAMBR 只在 LTE 模式有效（手册 16.17.2），5G 下要靠 ^DHCP 的承载最大速率兜底。
+  const [ambr, setAmbr] = useState<{ down: number | null; up: number | null }>({ down: null, up: null });
+  const [bearerRate, setBearerRate] = useState<{ down: number | null; up: number | null }>({ down: null, up: null });
   const [pdcp, setPdcp] = useState<PDCPData | null>(null);
   const [lastPdcp, setLastPdcp] = useState<PDCPData | null>(null);
   const [pdcpOn, setPdcpOn] = useState(false);
@@ -183,7 +187,8 @@ const NetworkInfo: React.FC = () => {
     return activeCidRef.current;
   };
 
-  const getAMBR = async () => {
+  // 返回是否已经从 ^DSAMBR 拿到了 APN，拿不到时由 getAPN 走 +CGDCONT 兜底。
+  const getAMBR = async (): Promise<boolean> => {
     const cid = await resolveActiveCid();
     // 手册 16.17 的 ^DSAMBR 必须带 cid，且写明“目前只支持 cid 为 1 的查询”，
     // 所以激活的 cid 查不到时退回 1。
@@ -192,20 +197,51 @@ const NetworkInfo: React.FC = () => {
       const res = await at().sendCommand(`AT^DSAMBR=${candidate}`);
       const str = res.success && res.data ? extractATData(res.data as string, '^DSAMBR') : null;
       if (!str) continue;
-      // 手册只定义 <cid>,<DlApnAmbr>,<UlApnAmbr>，APN 是部分固件多给的，
-      // 所以速率不能绑在“必须有第四个字段”上，否则按手册应答就一个都不显示。
+      // 手册 16.17.1 只定义 <cid>,<DlApnAmbr>,<UlApnAmbr>（单位 kbps），
+      // APN 是部分固件多给的第四个字段，速率不能绑在它上面。
       const parts = str.split(',');
-      if (parts.length >= 3) {
-        setDownSpeed((parseInt(parts[1], 10) || 0) / 1000);
-        setUpSpeed((parseInt(parts[2], 10) || 0) / 1000);
+      if (parts.length < 3) continue;
+      const down = parseInt(parts[1], 10);
+      const up = parseInt(parts[2], 10);
+      setAmbr({
+        down: Number.isFinite(down) && down > 0 ? down : null,
+        up: Number.isFinite(up) && up > 0 ? up : null,
+      });
+      const extraApn = parts.length >= 4 ? parts[3].trim().replace(/^["']|["']$/g, '') : '';
+      if (extraApn) {
+        setApn(extraApn);
+        return true;
       }
-      if (parts.length >= 4) {
-        setApn(parts[3].trim().replace(/^["']|["']$/g, '') || '未知');
-      }
-      return;
+      return false;
     }
-    // 全都没答上来，可能是缓存的 cid 已经失效（比如换了拨号方式），下次重新解析。
+    // ^DSAMBR 只在 LTE 下有效（手册 16.17.2），5G 下拿不到是正常的，
+    // 清掉旧值避免残留上一次 LTE 时的数字；速率改由 ^DHCP 的承载最大速率兜底。
+    setAmbr({ down: null, up: null });
+    // 也可能是缓存的 cid 已经失效（比如换了拨号方式），下次重新解析。
     activeCidRef.current = null;
+    return false;
+  };
+
+  // APN 兜底：从 AT+CGDCONT? 里取激活 cid（没有就取 cid 1）配置的 APN。
+  // 手册 7.1.3：<APN> 为空表示使用签约值，这时显示“运营商默认”而不是“未知”。
+  const getAPN = async () => {
+    const res = await at().sendCommand('AT+CGDCONT?');
+    if (!res.success || !res.data) return;
+    const rows = extractATDataMultiline(res.data as string, '+CGDCONT');
+    const contexts = rows
+      .map((row) => {
+        const m = row.match(/^(\d+),"([^"]*)","([^"]*)"/);
+        return m ? { cid: Number(m[1]), apn: m[3].trim() } : null;
+      })
+      .filter((v): v is { cid: number; apn: string } => v !== null);
+    if (contexts.length === 0) return;
+    const activeCid = activeCidRef.current;
+    const picked =
+      contexts.find((c) => activeCid !== null && c.cid === activeCid) ??
+      contexts.find((c) => c.cid === 1) ??
+      contexts.find((c) => c.cid > 0 && c.cid < 21) ??
+      contexts[0];
+    setApn(picked.apn || '运营商默认');
   };
 
   const getQCI = async () => {
@@ -222,7 +258,24 @@ const NetworkInfo: React.FC = () => {
     if (row) setQci(qciLabel(row.split(',')[1]?.trim()));
   };
 
+  // 手册 16.5 / 16.6：^DHCPV6 与 ^DHCP 都是 8 个字段
+  //   <addr>,<netmask>,<gate>,<dhcp>,<pDNS>,<sDNS>,<max_rx_data>,<max_tx_data>
+  // 最后两个是承载最大速率（bit/s），也就是这条承载的签约速率，
+  // 5G 下 ^DSAMBR 查不到时靠它兜底。未分配的地址是全零，统一显示成“未获取”。
   const getDHCP = async () => {
+    const addr = (v: string | undefined, hex = false): string => {
+      const s = (v ?? '').trim();
+      if (!s) return '';
+      const decoded = hex ? hexToIP(s) : s;
+      return isUnassignedAddress(decoded) ? '' : decoded;
+    };
+    // bit/s -> kbps，和 ^DSAMBR 统一单位
+    const rateKbps = (v: string | undefined): number | null => {
+      const n = parseInt((v ?? '').trim(), 10);
+      return Number.isFinite(n) && n > 0 ? n / 1000 : null;
+    };
+    let rate: { down: number | null; up: number | null } = { down: null, up: null };
+
     const v6 = await at().sendCommand('AT^DHCPV6?');
     if (v6.success && v6.data) {
       const str = extractATData(v6.data as string, '^DHCPV6');
@@ -230,13 +283,14 @@ const NetworkInfo: React.FC = () => {
         const d = str.split(',');
         if (d.length >= 6) {
           setDhcpv6({
-            ipv6Address: d[0].trim(),
-            netmask: d[1].trim(),
-            gateway: d[2].trim(),
-            dhcpServer: d[3].trim(),
-            primaryDNS: d[4].trim(),
-            secondaryDNS: d[5].trim(),
+            ipv6Address: addr(d[0]),
+            netmask: addr(d[1]),
+            gateway: addr(d[2]),
+            dhcpServer: addr(d[3]),
+            primaryDNS: addr(d[4]),
+            secondaryDNS: addr(d[5]),
           });
+          rate = { down: rateKbps(d[6]), up: rateKbps(d[7]) };
         }
       }
     }
@@ -247,16 +301,19 @@ const NetworkInfo: React.FC = () => {
         const d = str.split(',');
         if (d.length >= 6) {
           setDhcpv4({
-            ipv4Address: hexToIP(d[0].trim()),
-            subnetMask: hexToIP(d[1].trim()),
-            gateway: hexToIP(d[2].trim()),
-            dhcpServer: hexToIP(d[3].trim()),
-            primaryDNS: hexToIP(d[4].trim()),
-            secondaryDNS: hexToIP(d[5].trim()),
+            ipv4Address: addr(d[0], true),
+            subnetMask: addr(d[1], true),
+            gateway: addr(d[2], true),
+            dhcpServer: addr(d[3], true),
+            primaryDNS: addr(d[4], true),
+            secondaryDNS: addr(d[5], true),
           });
+          // IPv4 承载的速率优先；没有再用 IPv6 那组
+          rate = { down: rateKbps(d[6]) ?? rate.down, up: rateKbps(d[7]) ?? rate.up };
         }
       }
     }
+    setBearerRate(rate);
     const cap = await at().sendCommand('AT^IPV6CAP?');
     if (cap.success && cap.data) {
       const str = extractATData(cap.data as string, '^IPV6CAP');
@@ -383,7 +440,8 @@ const NetworkInfo: React.FC = () => {
       await updateSignal();
       await getOperator();
       await updateNetworkInfo();
-      await getAMBR();
+      const apnFromAmbr = await getAMBR();
+      if (!apnFromAmbr) await getAPN();
       await getQCI();
       await getDHCP();
       await getFlow();
@@ -450,8 +508,13 @@ const NetworkInfo: React.FC = () => {
         }
         if (urc.type === 'DSAMBR' && urc.parsed) {
           if (urc.parsed.apn) setApn(String(urc.parsed.apn).replace(/^["']|["']$/g, ''));
-          if (urc.parsed.maxDownlinkRate) setDownSpeed(urc.parsed.maxDownlinkRate / 1000);
-          if (urc.parsed.maxUplinkRate) setUpSpeed(urc.parsed.maxUplinkRate / 1000);
+          // 上报的单位与查询一致，都是 kbps（手册 16.17.3）
+          const down = Number(urc.parsed.maxDownlinkRate);
+          const up = Number(urc.parsed.maxUplinkRate);
+          setAmbr({
+            down: Number.isFinite(down) && down > 0 ? down : null,
+            up: Number.isFinite(up) && up > 0 ? up : null,
+          });
         }
       }
     };
@@ -624,14 +687,20 @@ const NetworkInfo: React.FC = () => {
                     { label: '运营商', value: operator },
                     { label: 'APN', value: apn },
                     { label: 'QCI', value: qci.split('：')[0] },
-                    { label: 'AMBR 上行', value: `${upSpeed.toFixed(1)} Mbps` },
-                    { label: 'AMBR 下行', value: `${downSpeed.toFixed(1)} Mbps` },
+                    { label: '签约下行', value: formatRateKbps(ambr.down ?? bearerRate.down) },
+                    { label: '签约上行', value: formatRateKbps(ambr.up ?? bearerRate.up) },
                   ]}
                 />
                 {/* 只有拿到 QCI 释义时才显示这行，否则会孤零零冒出一个"未知" */}
                 {qci.includes('：') ? (
                   <Typography.Text type="tertiary" size="small">
                     {qci.split('：')[1]}
+                  </Typography.Text>
+                ) : null}
+                {/* ^DSAMBR 只在 LTE 下有效，5G 时用 ^DHCP 的承载最大速率，标一下来源免得误会 */}
+                {ambr.down == null && ambr.up == null && (bearerRate.down != null || bearerRate.up != null) ? (
+                  <Typography.Text type="tertiary" size="small">
+                    签约速率取自当前承载的最大速率（^DHCP），^DSAMBR 仅 LTE 模式可查
                   </Typography.Text>
                 ) : null}
                 <div className="net-cell-params">

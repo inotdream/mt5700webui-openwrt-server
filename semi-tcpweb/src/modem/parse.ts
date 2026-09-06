@@ -100,6 +100,26 @@ export function splitSpeed(bytesPerSecond: number): { value: string; unit: strin
   return { value: Math.round(bits).toString(), unit: 'bps' };
 }
 
+// 签约/承载速率展示。输入单位 kbps（手册 16.17.3 ^DSAMBR 的单位），
+// 拿不到时给 null，界面上显示 "—" 而不是把初始值 0 画成 "0.0 Mbps"。
+export function formatRateKbps(kbps: number | null | undefined): string {
+  if (kbps == null || !Number.isFinite(kbps) || kbps <= 0) return '—';
+  if (kbps >= 1_000_000) return `${trimZero(kbps / 1_000_000)} Gbps`;
+  if (kbps >= 1000) return `${trimZero(kbps / 1000)} Mbps`;
+  return `${Math.round(kbps)} kbps`;
+}
+
+function trimZero(v: number): string {
+  return Number.isInteger(v) ? String(v) : v.toFixed(1);
+}
+
+// ^DHCP / ^DHCPV6 里未分配的地址是全零（手册 16.5.5 示例直接回 "::"），
+// 这种值对用户没有意义，统一当作没有拿到。
+export function isUnassignedAddress(addr: string | undefined): boolean {
+  const v = (addr ?? '').trim();
+  return v === '' || v === '::' || v === '0.0.0.0' || /^[0:.]+$/.test(v);
+}
+
 export function formatDuration(seconds: number, showDays: boolean): string {
   if (showDays) {
     const days = Math.floor(seconds / 86400);
