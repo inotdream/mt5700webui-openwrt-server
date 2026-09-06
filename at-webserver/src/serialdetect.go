@@ -103,6 +103,10 @@ func detectATPort(cfg SerialConfig, log *Logger) (Transport, error) {
 
 // probeAT 往端口发一条 AT 并等 OK。能回 OK 才算是可用的 AT 口。
 func probeAT(tp Transport) bool {
+	// 探测用的限时读结束后必须清掉 deadline，否则这条传输交给读循环后
+	// 第一次 Read 就会撞上残留的超时，报 i/o timeout 断开重连。
+	defer func() { _ = tp.SetReadDeadline(time.Time{}) }()
+
 	if _, err := tp.Write([]byte("AT\r")); err != nil {
 		return false
 	}

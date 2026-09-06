@@ -65,8 +65,13 @@ func configureTermios(fd int, speed uint32) error {
 	t.Cflag &^= syscall.CSIZE | syscall.PARENB | syscall.CSTOPB | crtsctsBit
 	t.Cflag |= syscall.CS8 | syscall.CREAD | syscall.CLOCAL
 
-	// 阻塞语义交给 netpoller，termios 层设成立即返回。
-	t.Cc[syscall.VMIN] = 0
+	// VMIN=1/VTIME=0：没有数据时 read 返回 EAGAIN，由 netpoller 等待唤醒。
+	//
+	// 绝不能设成 VMIN=0/VTIME=0。内核 n_tty_read 在没有数据时先判断
+	// timeout==0 就直接返回 0 字节，之后才轮到 O_NONBLOCK 的 EAGAIN 分支；
+	// Go 的 os.File 把 0 字节读当成 io.EOF，读循环第一次 Read 就退出，
+	// 日志表现为「已连接 → 模组连接中断: EOF」每 2 秒循环一次。
+	t.Cc[syscall.VMIN] = 1
 	t.Cc[syscall.VTIME] = 0
 
 	// Linux 的 TCSETS 只认 c_cflag 里的 CBAUD 位（c_ispeed/c_ospeed 要 TCSETS2 才生效，
